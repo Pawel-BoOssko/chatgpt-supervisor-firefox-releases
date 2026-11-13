@@ -53,7 +53,7 @@ jobs:
         shell: bash
         run: |
           npm install --global web-ext@10
-          web-ext lint --source-dir bundle
+          web-ext lint --source-dir bundle --self-hosted
       - name: Mozilla sign (unlisted only)
         shell: bash
         run: |
