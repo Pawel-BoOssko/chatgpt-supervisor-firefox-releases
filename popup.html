@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="pl"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+body{width:296px;margin:0;padding:14px;font:13px/1.45 system-ui,sans-serif;background:#1d242f;color:#eef2f8}
+h1{font-size:16px;margin:0 0 10px}
+.row{display:flex;align-items:center;gap:9px;margin:7px 0}
+.dot{width:10px;height:10px;border-radius:50%;flex:none}
+#connection{font-weight:600;margin-bottom:8px}
+#details{margin:10px 0;white-space:pre-line;opacity:.85}
+button{color:inherit;background:#303b51;border:1px solid #687387;border-radius:6px;padding:7px 10px;cursor:pointer}
+small{display:block;opacity:.76;margin-top:12px}
+</style></head><body>
+<h1>Nadzór: statusy czatów</h1>
+<div id="connection">Łączenie...</div>
+<small>Lewa połowa tła: status Nadzoru. Prawa połowa: wiek ostatniej zmiany pliku, według katalogu z Neo4j i filtrów Nadzoru.</small>
+<div class="row"><span class="dot" style="background:#13cd71"></span>Pliki do 10 min: intensywna zieleń</div>
+<div class="row"><span class="dot" style="background:#75be89"></span>10-60 min: słabsza zieleń</div>
+<div class="row"><span class="dot" style="background:#9bb5a7"></span>1-12 godz.: stopniowe blaknięcie</div>
+<div class="row"><span class="dot" style="background:#6a717d"></span>12-48 godz.: stopniowo ciemna szarość</div>
+<div class="row"><span class="dot" style="background:#19b77b"></span>Zielony (lewa strona): status PRACUJE</div>
+<div class="row"><span class="dot" style="background:#ef535d"></span>Czerwony (lewa strona): status wymagający reakcji</div>
+<div class="row"><span class="dot" style="background:#e2b438"></span>Żółty: wybudzanie lub kolejka</div>
+<div class="row"><span class="dot" style="background:#4e9af1"></span>Niebieski: kończenie pracy</div>
+<div class="row"><span class="dot" style="background:#37c2bd"></span>Turkusowy: rejestracja / wyjaśnienie</div>
+<div class="row"><span class="dot" style="background:#8b95a4"></span>Szary: poza Nadzorem lub brak wpisu</div>
+<div class="row"><span class="dot" style="background:#596573"></span>Ciemnoszary: anulowany lub zastąpiony</div>
+<small>Przy otwartej rozmowie w prawym górnym rogu: zielony + wstawia polecenie rejestracji, żółty − wyrejestrowuje przez MCP, czerwony ▣ archiwizuje przez menu ChatGPT.</small>
+<div id="details"></div><button id="refresh">Odśwież</button>
+<script src="popup.js"></script></body></html>

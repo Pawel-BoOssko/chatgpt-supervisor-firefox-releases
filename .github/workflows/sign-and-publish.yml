@@ -1,0 +1,95 @@
+name: Sign and publish Firefox extension
+on:
+  push:
+    branches: [autosync/SATANAMD-firefox-status]
+    paths: [manifest.json, background.js, content.js, content.css, popup.html, popup.js]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: firefox-supervisor-release
+  cancel-in-progress: false
+jobs:
+  sign-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      WEB_EXT_API_KEY: ${{ secrets.AMO_API_KEY }}
+      WEB_EXT_API_SECRET: ${{ secrets.AMO_API_SECRET }}
+      ADDON_ID: chatgpt-supervisor-status@lupus.local
+      RELEASE_REPO: Pawel-BoOssko/chatgpt-supervisor-firefox-releases
+    steps:
+      - name: Checkout source branch
+        uses: actions/checkout@v4
+        with:
+          path: source
+      - name: Checkout update hosting branch
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: publish
+          persist-credentials: true
+      - name: Prepare addon and monotonic version
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p bundle signed
+          cp source/{manifest.json,background.js,content.js,content.css,popup.html,popup.js} bundle/
+          echo "ADDON_VERSION=0.4.$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          python3 - <<'PY'
+          import json,os,pathlib
+          file=pathlib.Path("bundle/manifest.json")
+          data=json.loads(file.read_text(encoding="utf-8"))
+          assert data["browser_specific_settings"]["gecko"]["id"]==os.environ["ADDON_ID"]
+          assert data["browser_specific_settings"]["gecko"]["update_url"]=="https://raw.githubusercontent.com/"+os.environ["RELEASE_REPO"]+"/main/updates.json"
+          data["version"]="0.4."+os.environ["GITHUB_RUN_NUMBER"]
+          file.write_text(json.dumps(data,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+          PY
+      - name: Install Mozilla web-ext CLI
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Lint source
+        shell: bash
+        run: |
+          npm install --global web-ext@10
+          web-ext lint --source-dir bundle
+      - name: Mozilla sign (unlisted only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$WEB_EXT_API_KEY"
+          test -n "$WEB_EXT_API_SECRET"
+          web-ext sign --source-dir bundle --artifacts-dir signed --channel unlisted --approval-timeout 900000 --timeout 300000
+          test "$(find signed -maxdepth 1 -type f -name '*.xpi' | wc -l)" -eq 1
+          SIGNED_FILE="$(find signed -maxdepth 1 -type f -name '*.xpi' -print -quit)"
+          unzip -Z1 "$SIGNED_FILE" | grep -q '^META-INF/'
+      - name: Publish signed XPI and update manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          SIGNED_FILE="$(find signed -maxdepth 1 -type f -name '*.xpi' -print -quit)"
+          mkdir -p publish/releases
+          NAME="ChatGPTSupervisorStatus-$ADDON_VERSION-signed.xpi"
+          cp "$SIGNED_FILE" "publish/releases/$NAME"
+          HASH="$(sha256sum "publish/releases/$NAME" | cut -d' ' -f1)"
+          export RELEASE_FILENAME="$NAME" RELEASE_SHA256="$HASH"
+          python3 - <<'PY'
+          import json,os,pathlib
+          url="https://raw.githubusercontent.com/"+os.environ["RELEASE_REPO"]+"/main/releases/"+os.environ["RELEASE_FILENAME"]
+          item={"version":os.environ["ADDON_VERSION"],"update_link":url,"update_hash":"sha256:"+os.environ["RELEASE_SHA256"]}
+          data={"addons":{os.environ["ADDON_ID"]:{"updates":[item]}}}
+          pathlib.Path("publish/updates.json").write_text(json.dumps(data,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+          PY
+          git -C publish config user.name "github-actions[bot]"
+          git -C publish config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C publish add updates.json releases/
+          if git -C publish diff --cached --quiet; then exit 0; fi
+          git -C publish commit -m "Mozilla signed Firefox status $ADDON_VERSION"
+          git -C publish push origin main
+      - name: Preserve signed build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firefox-status-${{ github.run_number }}-signed
+          path: signed/*.xpi
+          retention-days: 30

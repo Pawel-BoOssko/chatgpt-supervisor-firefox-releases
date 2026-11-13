@@ -1,0 +1,104 @@
+/* Firefox ChatGPT Supervisor Status 0.3.0.
+   Does not alter ChatGPT layout, link positions, native typography or hover behavior. */
+a.cgs-status-link.cgs-green  { --cgs-color: #19b77b; }
+a.cgs-status-link.cgs-red    { --cgs-color: #ef535d; }
+a.cgs-status-link.cgs-yellow { --cgs-color: #e2b438; }
+a.cgs-status-link.cgs-blue   { --cgs-color: #4e9af1; }
+a.cgs-status-link.cgs-teal   { --cgs-color: #37c2bd; }
+a.cgs-status-link.cgs-gray   { --cgs-color: #8b95a4; }
+a.cgs-status-link.cgs-muted  { --cgs-color: #596573; }
+a.cgs-status-link {
+  box-shadow: inset 3px 0 0 var(--cgs-color, #8b95a4) !important;
+  background-image: linear-gradient(90deg,
+    var(--cgs-left-fill, transparent) 0%,
+    var(--cgs-left-fill, transparent) 32%,
+    var(--cgs-right-fill, transparent) 68%,
+    var(--cgs-right-fill, transparent) 100%) !important;
+  background-repeat: no-repeat !important;
+  border-radius: 7px !important;
+}
+/* Fixed toolbar is independent of the application's DOM layout. */
+#cgs-status-actions {
+  position: fixed !important;
+  z-index: 2147483000 !important;
+  top: 60px !important;
+  right: 18px !important;
+  width: auto !important;
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  gap: 6px !important;
+  padding: 5px 6px !important;
+  border-radius: 999px !important;
+  box-sizing: border-box !important;
+  background: var(--main-surface-primary, Canvas) !important;
+  border: 1px solid rgba(128,128,128,.35) !important;
+  box-shadow: 0 2px 9px rgba(0,0,0,.16) !important;
+  isolation: isolate !important;
+  pointer-events: auto !important;
+}
+#cgs-status-actions[hidden], #cgs-status-actions .cgs-toast[hidden] {
+  display: none !important;
+}
+#cgs-status-actions button.cgs-action {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex: 0 0 28px !important;
+  width: 28px !important;
+  height: 28px !important;
+  min-width: 28px !important;
+  min-height: 28px !important;
+  max-width: 28px !important;
+  max-height: 28px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 50% !important;
+  cursor: pointer !important;
+  font: 700 20px/1 system-ui, sans-serif !important;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.12) !important;
+  transition: filter .12s ease !important;
+  pointer-events: auto !important;
+}
+#cgs-status-actions button.cgs-action:hover:not(:disabled) {
+  filter: brightness(1.13) !important;
+}
+#cgs-status-actions button.cgs-action:disabled {
+  filter: grayscale(.75) opacity(.4) !important;
+  cursor: default !important;
+}
+#cgs-status-actions .cgs-action-join {
+  background: #17aa68 !important;
+  color: #fff !important;
+}
+#cgs-status-actions .cgs-action-leave {
+  background: #f1ba33 !important;
+  color: #172027 !important;
+}
+#cgs-status-actions .cgs-action-archive {
+  background: #e54a57 !important;
+  color: #fff !important;
+  font-size: 15px !important;
+}
+#cgs-status-actions .cgs-toast {
+  position: absolute !important;
+  top: 42px !important;
+  right: 0 !important;
+  width: max-content !important;
+  max-width: 380px !important;
+  padding: 9px 12px !important;
+  border: 1px solid rgba(128,128,128,.35) !important;
+  border-radius: 8px !important;
+  background: var(--main-surface-primary, Canvas) !important;
+  color: var(--text-primary, CanvasText) !important;
+  box-shadow: 0 4px 14px rgba(0,0,0,.20) !important;
+  font: 13px/1.45 system-ui, sans-serif !important;
+}
+#cgs-status-actions .cgs-toast[data-error="1"] {
+  border-color: #ed5559 !important;
+}
+@media (max-width: 700px) {
+  #cgs-status-actions { top: 68px !important; right: 9px !important; }
+  #cgs-status-actions .cgs-toast { max-width: calc(100vw - 22px) !important; }
+}
