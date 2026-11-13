@@ -2,7 +2,7 @@ name: Sign and publish Firefox extension
 on:
   push:
     branches: [autosync/SATANAMD-firefox-status]
-    paths: [manifest.json, background.js, content.js, content.css, popup.html, popup.js]
+    paths: [manifest.json, background.js, content.js, content.css, popup.html, popup.js, .github/workflows/sign-and-publish.yml]
   workflow_dispatch:
 permissions:
   contents: write
