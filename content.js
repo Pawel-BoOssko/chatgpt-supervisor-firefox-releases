@@ -259,11 +259,180 @@
   function isSidebarLink(a) {
     return !!a.closest("nav,aside,[data-testid*='sidebar'],[data-sidebar-item],[role='navigation']");
   }
+
+  const bulkSelected=new Set();
+  let bulkFilter="",bulkPanel=null,bulkResult=null,bulkBusy=false;
+  const normalized=value=>(value||"").normalize("NFKD").replace(/[\u0300-\u036f]/g,"").toLowerCase();
+  function sidebarRows(){
+    return [...document.querySelectorAll("a[href*='/c/']")]
+      .filter(a=>isSidebarLink(a)&&uuidForLink(a));
+  }
+  function applyBulkFilter(){
+    const term=normalized(bulkFilter.trim());
+    let shown=0;
+    for(const a of sidebarRows()){
+      const id=uuidForLink(a),name=originalTitle(a),imeno=profiles[id]?.imeno||"";
+      const match=!term||normalized(name).includes(term)||normalized(imeno).includes(term);
+      a.classList.toggle("cgs-filter-hidden",!match);
+      if(match)shown++;
+      const box=a.querySelector(".cgs-bulk-check");
+      if(box)box.checked=bulkSelected.has(id);
+    }
+    if(bulkPanel){
+      bulkPanel.querySelector(".cgs-bulk-counter").textContent=
+        bulkSelected.size+" zaznaczonych · "+shown+" widocznych";
+    }
+  }
+  function addBulkCheckbox(a){
+    if(a.querySelector(".cgs-bulk-check"))return;
+    const id=uuidForLink(a);
+    if(!id)return;
+    const checkbox=document.createElement("input");
+    checkbox.type="checkbox";checkbox.className="cgs-bulk-check";
+    checkbox.title="Zaznacz rozmowę";
+    checkbox.setAttribute("aria-label","Zaznacz rozmowę");
+    checkbox.checked=bulkSelected.has(id);
+    checkbox.addEventListener("click",e=>e.stopPropagation());
+    checkbox.addEventListener("pointerdown",e=>e.stopPropagation());
+    checkbox.addEventListener("change",e=>{
+      if(e.target.checked)bulkSelected.add(id);else bulkSelected.delete(id);
+      applyBulkFilter();
+    });
+    a.prepend(checkbox);
+  }
+  function bulkNotice(message,error=false){
+    if(bulkResult){bulkResult.textContent=message;bulkResult.dataset.error=error?"1":"0";}
+  }
+  async function bulkImportant(value){
+    const ids=[...bulkSelected];
+    if(!ids.length||bulkBusy)return;
+    if(!window.confirm("Ustawić important="+value+" dla "+ids.length+" rozmów?"))return;
+    bulkBusy=true;
+    let ok=0,failed=[];
+    try{
+      for(let i=0;i<ids.length;i++){
+        const uuid=ids[i],profile=profiles[uuid];
+        if(!profile){failed.push(uuid+": brak profilu");continue;}
+        try{
+          const result=await browser.runtime.sendMessage({
+            type:"SUP_PROFILE_UPDATE",uuid,field:"important",important:value,
+            expected_revision:profile.revision});
+          if(!result?.ok)throw new Error(result?.error||"API error");
+          ok++;bulkSelected.delete(uuid);
+          profiles[uuid]={...profile,important:value,
+            revision:typeof profile.revision==="number"?profile.revision+1:profile.revision};
+        }catch(e){failed.push(uuid+": "+(e.message||e));}
+        bulkNotice("important="+value+": "+(i+1)+"/"+ids.length+
+          ", sukces "+ok+", błędy "+failed.length);
+      }
+      await refreshProfiles(true);
+      applyBulkFilter();
+      bulkNotice("important="+value+": wykonano "+ok+"/"+ids.length+
+        ", błędy "+failed.length+(failed.length?" · "+failed.slice(0,2).join("; "):""),
+        failed.length>0);
+    }finally{bulkBusy=false;}
+  }
+  function bulkOpenTabs(){
+    const ids=[...bulkSelected];
+    if(!ids.length||bulkBusy)return;
+    if(ids.length>12&&!window.confirm("Otworzyć "+ids.length+" nowych kart?"))return;
+    // Browser may block window.open; each URL is grounded in an observed UUID.
+    for(const uuid of ids)window.open("https://chatgpt.com/c/"+uuid,"_blank","noopener");
+    bulkNotice("Zażądano otwarcia "+ids.length+" kart. Sprawdź blokadę wyskakujących okien.");
+  }
+  async function archiveOneSidebar(uuid){
+    const link=sidebarRows().find(a=>uuidForLink(a)===uuid);
+    if(!link)throw new Error("Rozmowa niewidoczna w panelu");
+    let more=null;
+    for(let node=link.parentElement,depth=0;node&&depth<4;node=node.parentElement,depth++){
+      more=[...node.querySelectorAll("button,[role='button']")]
+        .find(b=>/more|options|więcej|opcje|menu|actions/i.test(
+          [b.getAttribute("aria-label"),b.title,b.getAttribute("data-testid")].join(" "))&&
+          b.getClientRects().length>0);
+      if(more)break;
+    }
+    if(more)more.click();
+    else link.dispatchEvent(new MouseEvent("contextmenu",{
+      bubbles:true,cancelable:true,button:2,buttons:2,view:window}));
+    await new Promise(r=>setTimeout(r,450));
+    const menu=[...document.querySelectorAll("[role='menuitem']")]
+      .filter(e=>e.getClientRects().length>0).find(e=>{
+        const text=(e.textContent||"").trim().toLowerCase();
+        return text==="archiwizuj"||text==="archive"||text==="archive chat";
+      });
+    if(!menu)throw new Error("Nie znaleziono opcji archiwizacji");
+    menu.click();
+    await new Promise(r=>setTimeout(r,400));
+  }
+  async function bulkArchive(){
+    const ids=[...bulkSelected];
+    if(!ids.length||bulkBusy)return;
+    if(!window.confirm("Archiwizować "+ids.length+" rozmów w ChatGPT?"))return;
+    bulkBusy=true;
+    let invoked=0,errors=[];
+    try{
+      for(let i=0;i<ids.length;i++){
+        const uuid=ids[i];
+        try{await archiveOneSidebar(uuid);invoked++;bulkSelected.delete(uuid);}
+        catch(e){errors.push(uuid+": "+(e.message||e));}
+        bulkNotice("Archiwizacja "+(i+1)+"/"+ids.length+
+          "; wywołano "+invoked+"; błędy "+errors.length);
+      }
+      applyBulkFilter();
+      bulkNotice("Wywołano archiwizację "+invoked+"/"+ids.length+
+        ". Weryfikacja serwera ChatGPT nie jest dostępna."+
+        (errors.length?" "+errors.slice(0,2).join("; "):""),errors.length>0);
+    }finally{bulkBusy=false;}
+  }
+  function makeBulkPanel(){
+    if(bulkPanel?.isConnected)return;
+    const sidebar=document.getElementById("app-shell-sidebar")||
+      document.querySelector("aside,[data-testid*='sidebar']");
+    if(!sidebar)return;
+    const panel=document.createElement("section");
+    panel.id="cgs-bulk-panel";
+    panel.setAttribute("aria-label","Filtr i operacje zbiorcze rozmów");
+    const search=document.createElement("input");
+    search.type="search";search.placeholder="Filtr: tytuł lub imeno…";
+    search.className="cgs-bulk-search";search.value=bulkFilter;
+    search.addEventListener("input",()=>{bulkFilter=search.value;applyBulkFilter();});
+    panel.append(search);
+    const counter=document.createElement("div");
+    counter.className="cgs-bulk-counter";panel.append(counter);
+    const actions=document.createElement("div");actions.className="cgs-bulk-buttons";
+    function button(label,fn){
+      const b=document.createElement("button");b.type="button";b.textContent=label;
+      b.addEventListener("click",fn);actions.append(b);
+    }
+    button("Zaznacz widoczne",()=>{
+      for(const a of sidebarRows())if(!a.classList.contains("cgs-filter-hidden"))
+        bulkSelected.add(uuidForLink(a));
+      applyBulkFilter();
+    });
+    button("Odznacz widoczne",()=>{
+      for(const a of sidebarRows())if(!a.classList.contains("cgs-filter-hidden"))
+        bulkSelected.delete(uuidForLink(a));
+      applyBulkFilter();
+    });
+    button("Wyczyść wybór",()=>{bulkSelected.clear();applyBulkFilter();});
+    button("★ Ważne",()=>bulkImportant(1));
+    button("☆ Nieważne",()=>bulkImportant(0));
+    button("Otwórz karty",bulkOpenTabs);
+    button("Archiwizuj",bulkArchive);
+    panel.append(actions);
+    bulkResult=document.createElement("div");
+    bulkResult.className="cgs-bulk-result";
+    bulkResult.setAttribute("aria-live","polite");panel.append(bulkResult);
+    bulkPanel=panel;sidebar.prepend(panel);
+    applyBulkFilter();
+  }
+
   function scan() {
     for (const a of document.querySelectorAll("a[href*='/c/']")) {
       if (!isSidebarLink(a)) continue;
       const id = uuidForLink(a);
       if (!id) continue;
+      addBulkCheckbox(a);
       const item = states[id],profile=profiles[id];
       // Changing a text NODE leaves the native link, menu and ordering intact.
       showImeno(a,profile);
@@ -290,6 +459,7 @@
         (important?" | ważny":"")+
         (profile?.imeno?" | imeno: "+profile.imeno:"");
     }
+    applyBulkFilter();
     updateToolbar();
   }
   function queueScan() {
@@ -539,6 +709,7 @@
   function tick() {
     if (location.pathname!==lastPath) {lastPath=location.pathname;queueScan();}
     watchSidebar();
+    makeBulkPanel();
     makeToolbar();
     scan();
     refreshProfiles(false);
@@ -546,6 +717,7 @@
   }
   makeToolbar();
   watchSidebar();
+  makeBulkPanel();
   scan();
   refresh(true);
   refreshProfiles(true);
