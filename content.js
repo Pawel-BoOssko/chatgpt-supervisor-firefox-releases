@@ -572,6 +572,30 @@
     const panel=document.createElement("section");
     panel.id="cgs-bulk-panel";
     panel.setAttribute("aria-label","Filtr i operacje zbiorcze rozmów");
+
+    const build=globalThis.CGS_BUILD_INFO||{};
+    const buildLine=document.createElement("div");
+    buildLine.className="cgs-build-label";
+    buildLine.textContent=(build.name||"ChatGPT Supervisor Status")+
+      " v"+(build.version||"nieznana")+" · "+
+      (build.built_at_local||"brak daty kompilacji");
+    buildLine.title="Kompilacja: "+(build.built_at_utc||"brak")+
+      " | źródło: "+(build.build_kind||"nieznane");
+    panel.append(buildLine);
+    browser.runtime.sendMessage({type:"SUP_BUILD_STATUS"}).then(result=>{
+      if(!buildLine.isConnected)return;
+      if(result?.upToDate===false){
+        buildLine.dataset.update="old";
+        buildLine.textContent+=" · STARA (najnowsza v"+result.latest+")";
+      }else if(result?.upToDate===true){
+        buildLine.dataset.update="latest";
+        buildLine.textContent+=" · aktualna";
+      }else{
+        buildLine.dataset.update="unknown";
+        buildLine.title+=" | aktualność niezweryfikowana";
+      }
+    }).catch(()=>{buildLine.dataset.update="unknown";});
+
     const search=document.createElement("input");
     search.type="search";search.placeholder="Filtr: tytuł lub imeno…";
     search.className="cgs-bulk-search";search.value=bulkFilter;

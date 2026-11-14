@@ -179,3 +179,16 @@ a .cgs-bulk-check {
   padding:8px!important;font:12px system-ui,sans-serif!important;
 }
 #cgs-bulk-panel .cgs-index-warning {color:#d9a155!important;padding-top:3px!important;font-size:11px!important;}
+
+/* Always-visible build identity; generated at package creation, not runtime. */
+#cgs-bulk-panel .cgs-build-label {
+  display:block!important;font:10px/1.4 system-ui,sans-serif!important;
+  letter-spacing:.01em!important;overflow-wrap:anywhere!important;
+  padding:0 1px 6px!important;opacity:.88!important;
+}
+#cgs-bulk-panel .cgs-build-label[data-update="old"]{
+  color:#ffb4aa!important;font-weight:700!important;opacity:1!important;
+}
+#cgs-bulk-panel .cgs-build-label[data-update="latest"]{
+  color:#9bdcb5!important;
+}

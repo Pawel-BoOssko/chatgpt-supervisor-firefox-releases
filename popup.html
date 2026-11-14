@@ -10,8 +10,12 @@ h1{font-size:16px;margin:0 0 10px}
 #details{margin:10px 0;white-space:pre-line;opacity:.85}
 button{color:inherit;background:#303b51;border:1px solid #687387;border-radius:6px;padding:7px 10px;cursor:pointer}
 small{display:block;opacity:.76;margin-top:12px}
+#build-meta{font:11px/1.4 system-ui,sans-serif;opacity:.92;margin:-3px 0 10px;overflow-wrap:anywhere}
+#build-meta[data-update='old']{color:#ffb4aa;font-weight:700}
+#build-meta[data-update='latest']{color:#a2dfb9}
 </style></head><body>
 <h1>Nadzór: statusy czatów</h1>
+<div id="build-meta" aria-label="Wersja i data kompilacji"></div>
 <div id="connection">Łączenie...</div>
 <div class="row"><span class="dot" style="background:#f7c752"></span><strong>Ważny</strong>: złota linia przy tytule, monitorowanie plików</div>
 <small><strong>important:</strong> null = nieustalony, 1 = ważny, 0 = nieważny. Wyłącznie 1 uruchamia pomiar plików. Przycisk ★ / ☆ zmienia ważność, fioletowy ✎ ustawia imeno, które jest wyświetlane zamiast tytułu.</small>
@@ -29,4 +33,5 @@ small{display:block;opacity:.76;margin-top:12px}
 <div class="row"><span class="dot" style="background:#596573"></span>Ciemnoszary: anulowany lub zastąpiony</div>
 <small>Przy otwartej rozmowie w prawym górnym rogu: zielony + wstawia polecenie rejestracji, żółty − wyrejestrowuje przez MCP, czerwony ▣ archiwizuje przez menu ChatGPT.</small>
 <div id="details"></div><button id="refresh">Odśwież</button>
+<script src="build-info.js"></script>
 <script src="popup.js"></script></body></html>

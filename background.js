@@ -153,7 +153,59 @@ async function openChatTabs(uuids){
   return {ok:failures.length===0,opened,failures};
 }
 
+
+const UPDATE_MANIFEST="https://raw.githubusercontent.com/"+
+  "Pawel-BoOssko/chatgpt-supervisor-firefox-releases/main/updates.json";
+const ADDON_ID="chatgpt-supervisor-status@lupus.local";
+let updateStatusCache=null,updateStatusAt=0,updateStatusInflight=null;
+function compareVersions(a,b){
+  const parts=v=>String(v||"").split(".").map(n=>Number(n));
+  const left=parts(a),right=parts(b);
+  if(left.some(n=>!Number.isInteger(n))||right.some(n=>!Number.isInteger(n)))
+    return null;
+  for(let i=0;i<Math.max(left.length,right.length);i++){
+    const diff=(left[i]||0)-(right[i]||0);
+    if(diff)return Math.sign(diff);
+  }
+  return 0;
+}
+async function getBuildStatus(force=false){
+  const installed=browser.runtime.getManifest().version;
+  const build=globalThis.CGS_BUILD_INFO||{};
+  if(!force && updateStatusCache && Date.now()-updateStatusAt<900000)
+    return updateStatusCache;
+  if(updateStatusInflight)return updateStatusInflight;
+  updateStatusInflight=(async()=>{
+    let result={ok:false,installed,build,latest:null,upToDate:null};
+    try{
+      const controller=new AbortController();
+      const timeout=setTimeout(()=>controller.abort(),7000);
+      let response;
+      try{response=await fetch(UPDATE_MANIFEST,{
+        cache:"no-store",signal:controller.signal
+      });}finally{clearTimeout(timeout);}
+      if(!response.ok)throw new Error("HTTP "+response.status);
+      const data=await response.json();
+      const updates=data?.addons?.[ADDON_ID]?.updates;
+      if(!Array.isArray(updates)||!updates.length)
+        throw new Error("Brak wersji w manifeście aktualizacji");
+      const latest=updates.reduce((best,item)=>
+        compareVersions(item.version,best)>=0?item.version:best,
+        updates[0].version);
+      const comparison=compareVersions(installed,latest);
+      result={ok:comparison!==null,installed,build,latest,
+        upToDate:comparison===null?null:comparison>=0};
+    }catch(e){result.error=String(e.message||e);}
+    updateStatusCache=result;updateStatusAt=Date.now();
+    return result;
+  })();
+  try{return await updateStatusInflight;}
+  finally{updateStatusInflight=null;}
+}
+
 browser.runtime.onMessage.addListener(message=>{
+  if(message && message.type==="SUP_BUILD_STATUS")
+    return getBuildStatus(!!message.force);
   if(message && message.type==="SUP_STATUS_GET")
     return getStatus(!!message.force);
   if(message && message.type==="SUP_PROFILE_GET")

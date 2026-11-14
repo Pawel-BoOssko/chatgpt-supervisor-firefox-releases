@@ -1,0 +1,1 @@
+globalThis.CGS_BUILD_INFO = Object.freeze({"name":"ChatGPT Supervisor Status","version":"0.5.2","built_at_utc":"2026-11-14T17:36:01Z","built_at_local":"14.11.2026 g. 18:36 CET","build_kind":"local-source","commit":"local"});

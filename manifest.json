@@ -20,10 +20,12 @@
     "tabs"
   ],
   "host_permissions": [
-    "http://127.0.0.1/*"
+    "http://127.0.0.1/*",
+    "https://raw.githubusercontent.com/*"
   ],
   "background": {
     "scripts": [
+      "build-info.js",
       "background.js"
     ]
   },
@@ -37,6 +39,7 @@
         "https://chatgpt.com/*"
       ],
       "js": [
+        "build-info.js",
         "chat-index.js",
         "content.js"
       ],
