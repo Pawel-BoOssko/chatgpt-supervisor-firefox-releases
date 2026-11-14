@@ -25,6 +25,14 @@
   let navRoot = null;
   let scanQueued = false;
   let loadRunning = false;
+  const profiles=Object.create(null);
+  const originalTitles=new WeakMap();
+  let profileLoadRunning=false;
+  let profileLoadAt=0;
+  let lastProfileSignature="";
+  let observationLastAt=0;
+  let observationLastSuccess="";
+  let observationLastTryAt=0;
 
   function ageMinutes(value) {
     const ms = Date.parse(value || "");
@@ -88,6 +96,151 @@
     return {fill,info:"Ostatnia modyfikacja pliku: "+elapsed+" temu",
             minute:Math.floor(min)};
   }
+  function titleTextNode(link) {
+    const walker=document.createTreeWalker(link,NodeFilter.SHOW_TEXT);
+    let node,best=null,bestScore=-1;
+    while ((node=walker.nextNode())) {
+      const content=(node.nodeValue||"").trim();
+      const parent=node.parentElement;
+      if (!parent || !content || content.length>240 ||
+          parent.closest("button,[role='button'],svg,[aria-hidden='true']")) continue;
+      let score=content.length;
+      if (/truncate|overflow-hidden/i.test(parent.className||""))score+=60;
+      if (score>bestScore){bestScore=score;best=node;}
+    }
+    return best;
+  }
+  function originalTitle(link) {
+    let rec=originalTitles.get(link);
+    if (rec && link.contains(rec.node)) {
+      const now=rec.node.nodeValue;
+      if (now!==rec.applied && now!==rec.original) rec.original=now;
+      return rec.original.trim();
+    }
+    const node=titleTextNode(link);
+    return node ? (node.nodeValue||"").trim() : "";
+  }
+  function showImeno(link,profile) {
+    if (!profile) return;
+    const imeno=typeof profile.imeno==="string" ? profile.imeno.trim() : "";
+    let rec=originalTitles.get(link);
+    if (rec && !link.contains(rec.node)) {
+      originalTitles.delete(link);rec=null;
+    }
+    if (!imeno) {
+      if (rec && rec.node.nodeValue===rec.applied)rec.node.nodeValue=rec.original;
+      originalTitles.delete(link);
+      return;
+    }
+    if (!rec) {
+      const node=titleTextNode(link);
+      if (!node)return;
+      rec={node,original:node.nodeValue,applied:""};
+      originalTitles.set(link,rec);
+    }
+    if (rec.node.nodeValue!==imeno) {
+      if (rec.node.nodeValue!==rec.applied)rec.original=rec.node.nodeValue;
+      rec.node.nodeValue=imeno;
+    }
+    rec.applied=imeno;
+    link.dataset.cgsImeno=imeno;
+  }
+  function profileFileActivity(profile) {
+    const folders=profile && Array.isArray(profile.folders) ? profile.folders : [];
+    let best=null;
+    for(const f of folders){
+      if (!f || !f.path)continue;
+      const item={
+        folder:f.path,host:f.host,
+        last_modified:f.file_last_modified_at||null,
+        observed_at:f.scanned_at||null,
+        error:f.scan_status && f.scan_status!=="OK" ? f.scan_status : null
+      };
+      if (!best || ((item.last_modified||"")>(best.last_modified||"")))
+        best=item;
+    }
+    return best;
+  }
+  function currentVisibleIds() {
+    const ids=[],set=new Set();
+    const id=currentUuid();
+    if (id){ids.push(id);set.add(id);}
+    for(const link of document.querySelectorAll("a[href*='/c/']")){
+      if (!isSidebarLink(link))continue;
+      const uuid=uuidForLink(link);
+      if (!uuid || set.has(uuid))continue;
+      set.add(uuid);ids.push(uuid);
+      if(ids.length>=180)break;
+    }
+    return ids;
+  }
+  async function refreshProfiles(force=false) {
+    if (profileLoadRunning)return;
+    const ids=currentVisibleIds();
+    if(!ids.length)return;
+    const signature=ids.join(",");
+    if (!force && signature===lastProfileSignature &&
+        Date.now()-profileLoadAt<24000)return;
+    profileLoadRunning=true;
+    try {
+      const data=await browser.runtime.sendMessage({
+        type:"SUP_PROFILE_GET",uuids:ids,force:!!force});
+      if (data && Array.isArray(data.items)) {
+        for(const p of data.items){
+          if (p && p.uuid)profiles[p.uuid.toLowerCase()]=p;
+        }
+        if(data.ok){lastProfileSignature=signature;profileLoadAt=Date.now();}
+        queueScan();
+      }
+    }catch(e){}finally{profileLoadRunning=false;}
+  }
+  function ownMcpNickFromAssistant() {
+    const assistantMessages=[...document.querySelectorAll(
+      "[data-message-author-role='assistant'],[data-testid*='assistant-message']"
+    )].slice(-3);
+    const found=new Set();
+    const marker=/(?:^|[^\p{L}0-9_])MCP_NICK:@@@([\p{L}]{7,20}[0-9]{3})@@@/gu;
+    for(const message of assistantMessages){
+      let text="",walker=document.createTreeWalker(message,NodeFilter.SHOW_TEXT),node;
+      while((node=walker.nextNode()) && text.length<12000){
+        if(node.parentElement && node.parentElement.closest("pre,code,blockquote"))continue;
+        text+=(node.nodeValue||"");
+      }
+      for(const match of text.matchAll(marker)){
+        found.add("MCP_NICK:@@@"+match[1].toUpperCase()+"@@@");
+      }
+    }
+    return found.size===1 ? [...found][0] : null;
+  }
+  async function observeCurrentChat() {
+    const uuid=currentUuid();
+    if(!uuid || document.hidden)return;
+    const now=Date.now();
+    if (now-observationLastTryAt<9000)return;
+    observationLastTryAt=now;
+    const link=[...document.querySelectorAll("a[href*='/c/']")]
+      .find(x=>isSidebarLink(x) && uuidForLink(x)===uuid);
+    let title=link ? originalTitle(link) : "";
+    if(!title || title===profiles[uuid]?.imeno){
+      const documentTitle=(document.title||"").replace(/\s*[-–|]\s*ChatGPT\s*$/i,"").trim();
+      if(documentTitle && documentTitle.toLowerCase()!=="chatgpt")
+        title=documentTitle;
+      else title="";
+    }
+    const declaration=ownMcpNickFromAssistant();
+    const signature=uuid+"|"+title+"|"+(declaration||"");
+    if(signature===observationLastSuccess && now-observationLastAt<300000)return;
+    try{
+      const result=await browser.runtime.sendMessage({
+        type:"SUP_BROWSER_OBSERVE",uuid,title,
+        ...(declaration?{mcp_nick_declaration:declaration}:{})
+      });
+      if(result && result.ok){
+        observationLastSuccess=signature;
+        observationLastAt=now;
+      }
+    }catch(e){}
+  }
   function currentUuid() {
     const m = UUID_PATH.exec(location.pathname);
     return m ? m[1].toLowerCase() : null;
@@ -105,21 +258,31 @@
       if (!isSidebarLink(a)) continue;
       const id = uuidForLink(a);
       if (!id) continue;
-      const item = states[id];
-      const cls = classify(item);
-      const activity = fileAgeColor(item && item.activity);
-      const leftRGB = STATUS_RGB[cls.color] || STATUS_RGB.gray;
-      const leftAlpha = cls.color==="gray" ? .12 : cls.color==="muted" ? .16 : .38;
-      const leftFill = rgba(leftRGB,leftAlpha);
-      const key = cls.color+"|"+leftFill+"|"+activity.fill+"|"+(activity.minute ?? "?");
-      if (a.dataset.cgsKey === key) continue;
+      const item = states[id],profile=profiles[id];
+      // Changing a text NODE leaves the native link, menu and ordering intact.
+      showImeno(a,profile);
+      const cls=classify(item);
+      const important=profile && profile.important===1;
+      const activity=important
+        ? fileAgeColor((item && item.activity)||profileFileActivity(profile))
+        : {fill:"rgba(128,136,146,0.025)",
+           info:"important nie jest 1: bez dodatkowego monitoringu"};
+      const leftRGB=STATUS_RGB[cls.color]||STATUS_RGB.gray;
+      const leftAlpha=cls.color==="gray"?.12:cls.color==="muted"?.16:.38;
+      const leftFill=rgba(leftRGB,leftAlpha);
+      const key=cls.color+"|"+leftFill+"|"+activity.fill+"|"+
+        (activity.minute ?? "?")+"|"+(important?1:0)+"|"+(profile?.imeno||"");
+      if(a.dataset.cgsKey===key)continue;
       a.classList.remove(...STATUS_CLASSES);
-      a.classList.add("cgs-status-link","cgs-" + cls.color);
+      a.classList.add("cgs-status-link","cgs-"+cls.color);
+      a.classList.toggle("cgs-important",important);
       a.style.setProperty("--cgs-left-fill",leftFill);
       a.style.setProperty("--cgs-right-fill",activity.fill);
-      a.dataset.cgsKey = key;
-      a.dataset.cgsStatus = item ? item.status : "BRAK_W_BAZIE";
-      a.dataset.cgsLabel = cls.label+" | "+activity.info;
+      a.dataset.cgsKey=key;
+      a.dataset.cgsStatus=item?item.status:"BRAK_W_BAZIE";
+      a.dataset.cgsLabel=cls.label+" | "+activity.info+
+        (important?" | ważny":"")+
+        (profile?.imeno?" | imeno: "+profile.imeno:"");
     }
     updateToolbar();
   }
@@ -168,6 +331,43 @@
       "[data-testid='prompt-textarea'][contenteditable='true'], " +
       "textarea#prompt-textarea,textarea[data-testid='prompt-textarea']"
     );
+  }
+  async function saveProfileField(field,value) {
+    const id=currentUuid(),profile=id && profiles[id];
+    if (!id || !profile || busy)return;
+    busy=true;updateToolbar();
+    try{
+      const result=await browser.runtime.sendMessage({
+        type:"SUP_PROFILE_UPDATE",uuid:id,field,
+        ...(field==="important"?{important:value}:{imeno:value}),
+        expected_revision:profile.revision
+      });
+      if(!result || !result.ok)
+        throw new Error((result&&result.error)||"Zapis niepotwierdzony");
+      toast(field==="important"
+        ? (value===1?"Oznaczono jako ważny.":"Oznaczono jako nieważny.")
+        : "Zapisano imeno.",false);
+      await refreshProfiles(true);
+    }catch(e){
+      toast("Imeno: "+(e.message||e),true);
+      await refreshProfiles(true);
+    }finally{busy=false;updateToolbar();}
+  }
+  function toggleImportance() {
+    const id=currentUuid(),profile=id && profiles[id];
+    if(!profile){toast("Brak danych profilu Neo4j.",true);return;}
+    saveProfileField("important",profile.important===1?0:1);
+  }
+  function editImeno() {
+    const id=currentUuid(),profile=id && profiles[id];
+    if(!profile){toast("Brak danych profilu Neo4j.",true);return;}
+    const value=window.prompt("Ustaw imeno rozmowy (1–120 znaków):",
+                              profile.imeno||"");
+    if(value===null)return;
+    const imeno=value.trim();
+    if(!imeno || imeno.length>120){toast("Imeno: wpisz 1–120 znaków.",true);return;}
+    if(imeno===profile.imeno)return;
+    saveProfileField("imeno",imeno);
   }
   function insertJoinPrompt() {
     const editor = composer();
@@ -283,6 +483,8 @@
     const actions = [
       {id:"join",text:"+",title:"Zgłoś do Nadzoru: wstaw polecenie do czatu",callback:insertJoinPrompt},
       {id:"leave",text:"−",title:"Wyrejestruj z Nadzoru",callback:unsubscribe},
+      {id:"important",text:"☆",title:"Oznacz czat jako ważny",callback:toggleImportance},
+      {id:"imeno",text:"✎",title:"Ustaw imeno",callback:editImeno},
       {id:"archive",text:"▣",title:"Archiwizuj rozmowę w ChatGPT",callback:archiveViaChatGPT}
     ];
     for(const action of actions){
@@ -310,9 +512,22 @@
     const join=toolbar.querySelector(".cgs-action-join");
     const leave=toolbar.querySelector(".cgs-action-leave");
     const archive=toolbar.querySelector(".cgs-action-archive");
+    const star=toolbar.querySelector(".cgs-action-important");
+    const edit=toolbar.querySelector(".cgs-action-imeno");
+    const profile=profiles[id];
     join.disabled=busy || status.registered;
     leave.disabled=busy || !status.registered || !connected;
     archive.disabled=busy;
+    star.disabled=busy || !profile;
+    edit.disabled=busy || !profile;
+    const important=profile && profile.important===1;
+    star.textContent=important?"★":"☆";
+    star.setAttribute("aria-pressed",important?"true":"false");
+    star.title=important?"Ważny: kliknij, aby ustawić 0"
+                        :"Kliknij, aby ustawić important=1";
+    star.dataset.important=profile && profile.important!==null
+                           ?String(profile.important):"null";
+    edit.title=profile?.imeno?"Imeno: "+profile.imeno:"Ustaw imeno rozmowy";
     toolbar.dataset.registered=status.registered ? "1":"0";
   }
   function tick() {
@@ -320,12 +535,17 @@
     watchSidebar();
     makeToolbar();
     scan();
+    refreshProfiles(false);
+    observeCurrentChat();
   }
   makeToolbar();
   watchSidebar();
   scan();
   refresh(true);
+  refreshProfiles(true);
   setInterval(tick,3000);
   setInterval(()=>refresh(false),15000);
-  document.addEventListener("visibilitychange",()=>{if(!document.hidden)refresh(true);});
+  document.addEventListener("visibilitychange",()=>{
+    if(!document.hidden){refresh(true);refreshProfiles(true);observeCurrentChat();}
+  });
 })();

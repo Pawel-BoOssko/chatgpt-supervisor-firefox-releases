@@ -1,4 +1,4 @@
-/* Firefox ChatGPT Supervisor Status 0.3.0.
+/* Firefox ChatGPT Supervisor Status 0.4.0.
    Does not alter ChatGPT layout, link positions, native typography or hover behavior. */
 a.cgs-status-link.cgs-green  { --cgs-color: #19b77b; }
 a.cgs-status-link.cgs-red    { --cgs-color: #ef535d; }
@@ -7,6 +7,11 @@ a.cgs-status-link.cgs-blue   { --cgs-color: #4e9af1; }
 a.cgs-status-link.cgs-teal   { --cgs-color: #37c2bd; }
 a.cgs-status-link.cgs-gray   { --cgs-color: #8b95a4; }
 a.cgs-status-link.cgs-muted  { --cgs-color: #596573; }
+/* Gold upper inset line marks important=1 without altering native layout. */
+a.cgs-status-link.cgs-important {
+  box-shadow: inset 3px 0 0 var(--cgs-color, #8b95a4),
+              inset 0 2px 0 rgba(250, 193, 67, .96) !important;
+}
 a.cgs-status-link {
   box-shadow: inset 3px 0 0 var(--cgs-color, #8b95a4) !important;
   background-image: linear-gradient(90deg,
@@ -80,6 +85,22 @@ a.cgs-status-link {
   background: #e54a57 !important;
   color: #fff !important;
   font-size: 15px !important;
+}
+#cgs-status-actions .cgs-action-important {
+  background: #be9750 !important;
+  color: #221605 !important;
+  font-size: 22px !important;
+}
+#cgs-status-actions .cgs-action-important[data-important="1"] {
+  background: #f7c752 !important;
+  color: #2b1a00 !important;
+  box-shadow: 0 0 0 1px rgba(255,194,56,.30),
+              0 0 9px rgba(240,190,53,.45) !important;
+}
+#cgs-status-actions .cgs-action-imeno {
+  background: #7966ba !important;
+  color: #fff !important;
+  font-size: 20px !important;
 }
 #cgs-status-actions .cgs-toast {
   position: absolute !important;

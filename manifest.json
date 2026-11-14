@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT Supervisor Status",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Statusy rozmow z bazy Nadzoru oraz zglaszanie, wyrejestrowanie MCP i archiwizowanie w ChatGPT.",
   "browser_specific_settings": {
     "gecko": {
