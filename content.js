@@ -269,6 +269,7 @@
   const chatIndex=typeof globalThis.CGSCreateChatIndex==="function"
     ? globalThis.CGSCreateChatIndex({
       onUpdate:()=>queueScan(),
+      shouldContinue:()=>!!bulkFilter.trim()&&!document.hidden,
       loadProfiles:async ids=>{
         if(!ids.length)return;
         try{
@@ -553,7 +554,7 @@
     try{
       for(let i=0;i<ids.length;i++){
         const uuid=ids[i];
-        try{await archiveOneSidebar(uuid);archived++;bulkSelected.delete(uuid);}
+        try{await archiveOneSidebar(uuid);archived++;bulkSelected.delete(uuid);chatIndex?.remove(uuid);}
         catch(e){errors.push(uuid+": "+(e.message||e));}
         bulkNotice("Archiwizacja "+(i+1)+"/"+ids.length+
           "; potwierdzono "+archived+"; błędy "+errors.length);
@@ -909,6 +910,6 @@
   setInterval(tick,3000);
   setInterval(()=>refresh(false),15000);
   document.addEventListener("visibilitychange",()=>{
-    if(!document.hidden){refresh(true);refreshProfiles(true);observeCurrentChat();}
+    if(!document.hidden){refresh(true);refreshProfiles(true);observeCurrentChat();if(bulkFilter.trim())scheduleIndexLoad();}
   });
 })();
