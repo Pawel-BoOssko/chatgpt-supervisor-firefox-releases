@@ -12,6 +12,12 @@
     "Podaj przede wszystkim pełną ścieżkę swojego rzeczywistego katalogu roboczego na SATANAMD",
     "oraz wszystkie dane identyfikacyjne, o które poprosi serwer MCP, w tym MCP_NICK, MCP_ID",
     "i UUID, jeśli zostały potwierdzone przez serwer. Nie wymyślaj identyfikatorów.",
+    "Jeżeli nie masz jeszcze MCP_NICK: wybierz trzy losowe słowa alfabetu NATO, połącz je",
+    "bez spacji i dodaj trzy cyfry. Łącznie część literowa ma mieć 7-20 liter.",
+    "Koniecznie pokaż w zwykłej treści odpowiedzi poprawny znacznik",
+    "MCP_NICK:@@@TWOJWYBRANYNICK123@@@, zastępując ten przykład rzeczywistym nickiem.",
+    "Nie umieszczaj go wyłącznie w bloku kodu. Rejestr przeglądarki wyłapie go jako",
+    "kandydaturę, a powiązanie z MCP_ID musi zostać potwierdzone przez MCP.",
     "Wykonaj rejestrację we właściwym mechanizmie MCP, a następnie podaj katalog",
     "i faktyczny wynik zgłoszenia. Nie odczytuj bezpośrednio bazy SQLite Nadzoru."
   ].join(" ");
