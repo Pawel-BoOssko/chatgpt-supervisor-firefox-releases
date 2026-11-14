@@ -332,13 +332,18 @@
         failed.length>0);
     }finally{bulkBusy=false;}
   }
-  function bulkOpenTabs(){
+  async function bulkOpenTabs(){
     const ids=[...bulkSelected];
     if(!ids.length||bulkBusy)return;
     if(ids.length>12&&!window.confirm("Otworzyć "+ids.length+" nowych kart?"))return;
-    // Browser may block window.open; each URL is grounded in an observed UUID.
-    for(const uuid of ids)window.open("https://chatgpt.com/c/"+uuid,"_blank","noopener");
-    bulkNotice("Zażądano otwarcia "+ids.length+" kart. Sprawdź blokadę wyskakujących okien.");
+    bulkBusy=true;
+    try{
+      const result=await browser.runtime.sendMessage({type:"SUP_OPEN_TABS",uuids:ids});
+      bulkNotice("Otwarto "+(result?.opened||0)+"/"+ids.length+" kart."+
+        (result?.failures?.length?" Błędy: "+result.failures.slice(0,2).join("; "):""),
+        !result?.ok);
+    }catch(e){bulkNotice("Otwieranie kart: "+(e.message||e),true);}
+    finally{bulkBusy=false;}
   }
   async function archiveOneSidebar(uuid){
     const link=sidebarRows().find(a=>uuidForLink(a)===uuid);

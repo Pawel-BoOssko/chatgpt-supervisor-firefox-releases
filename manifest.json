@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT Supervisor Status",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Statusy rozmow z bazy Nadzoru oraz zglaszanie, wyrejestrowanie MCP i archiwizowanie w ChatGPT.",
   "browser_specific_settings": {
     "gecko": {
@@ -16,7 +16,8 @@
     }
   },
   "permissions": [
-    "storage"
+    "storage",
+    "tabs"
   ],
   "host_permissions": [
     "http://127.0.0.1/*"

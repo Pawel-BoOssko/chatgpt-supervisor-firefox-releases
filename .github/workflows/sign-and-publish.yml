@@ -1,7 +1,7 @@
 name: Sign and publish Firefox extension
 on:
   push:
-    branches: [autosync/SATANAMD-firefox-status]
+    branches: [main, autosync/SATANAMD-firefox-status]
     paths: [manifest.json, background.js, content.js, content.css, popup.html, popup.js, .github/workflows/sign-and-publish.yml]
   workflow_dispatch:
 permissions:
@@ -35,14 +35,14 @@ jobs:
           set -euo pipefail
           mkdir -p bundle signed
           cp source/{manifest.json,background.js,content.js,content.css,popup.html,popup.js} bundle/
-          echo "ADDON_VERSION=0.4.$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          echo "ADDON_VERSION=0.5.$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
           python3 - <<'PY'
           import json,os,pathlib
           file=pathlib.Path("bundle/manifest.json")
           data=json.loads(file.read_text(encoding="utf-8"))
           assert data["browser_specific_settings"]["gecko"]["id"]==os.environ["ADDON_ID"]
           assert data["browser_specific_settings"]["gecko"]["update_url"]=="https://raw.githubusercontent.com/"+os.environ["RELEASE_REPO"]+"/main/updates.json"
-          data["version"]="0.4."+os.environ["GITHUB_RUN_NUMBER"]
+          data["version"]="0.5."+os.environ["GITHUB_RUN_NUMBER"]
           file.write_text(json.dumps(data,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
           PY
       - name: Install Mozilla web-ext CLI
