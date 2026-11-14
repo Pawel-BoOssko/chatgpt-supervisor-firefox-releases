@@ -27,3 +27,13 @@ Changes to the six extension files on SATANAMD are detected by the existing 10-m
 The AMO API JWT credentials must be configured as repository Actions secrets AMO_API_KEY and AMO_API_SECRET. Never add them to source code, commit history, or update manifests. Repo contains no local production SQLite data or user credentials.
 
 Manual initial installation: use a signed XPI from releases/ or via the Firefox Add-ons Manager. An unsigned XPI works only for temporary developer installation and will disappear on browser restart.
+
+## Sidebar search and bulk actions (v0.5.1)
+
+- A live search field at the top of the ChatGPT sidebar filters only the currently rendered sidebar conversations, matching native title and imeno (case/accent insensitive). Archived records retained in Neo4j are not injected into the active sidebar.
+- Selection is keyed by conversation UUID and persists across filter changes and sidebar DOM rerenders. Buttons select visible, deselect visible, or clear the complete selection.
+- Bulk important=1/0 uses central Imeno API through the localhost bridge with per-chat optimistic concurrency and error reporting.
+- Bulk open uses Firefox browser.tabs.create through the extension background script, with a maximum of 40 unique validated UUIDs per action.
+- Bulk archive uses the native ChatGPT sidebar menu, with explicit confirmation. It reports attempted menu clicks, not backend-confirmed archival. Unavailable menu options are reported as failures.
+- Source verification: Mozilla web-ext lint 0 errors/0 warnings, JavaScript syntax checks, Neo4j mock tests, and jsdom DOM test for filtering and persistent selection.
+- The signing workflow is triggered on main and autosync branch changes. Without AMO_API_KEY and AMO_API_SECRET GitHub Actions reports success but skips Mozilla signing and XPI publication. A successful workflow alone is not proof of a signed release.
