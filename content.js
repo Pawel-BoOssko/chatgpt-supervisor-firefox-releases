@@ -392,7 +392,7 @@
       bulkSurfaceBasePadding=getComputedStyle(surface).paddingTop||"0px";
     }
     const height=Math.ceil(panel.getBoundingClientRect().height||
-      panel.offsetHeight||190)+10;
+      panel.offsetHeight||190)+32;
     const desired="calc("+bulkSurfaceBasePadding+" + "+height+"px)";
     if(surface.style.getPropertyValue("padding-top")!==desired)
       surface.style.setProperty("padding-top",desired,"important");
@@ -610,6 +610,9 @@
     warning.hidden=true;panel.append(warning);
     bulkPanel=panel;sidebar.prepend(panel);
     positionBulkPanel(sidebar,panel);
+    if(typeof ResizeObserver!=="undefined")new ResizeObserver(()=>{
+      if(panel.isConnected)positionBulkPanel(sidebar,panel);
+    }).observe(panel);
     applyBulkFilter();
   }
 
