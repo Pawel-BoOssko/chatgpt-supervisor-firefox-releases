@@ -12,6 +12,12 @@
     "Podaj przede wszystkim pełną ścieżkę swojego rzeczywistego katalogu roboczego na SATANAMD",
     "oraz wszystkie dane identyfikacyjne, o które poprosi serwer MCP, w tym MCP_NICK, MCP_ID",
     "i UUID, jeśli zostały potwierdzone przez serwer. Nie wymyślaj identyfikatorów.",
+    "Jeżeli nie masz jeszcze MCP_NICK: wybierz trzy losowe słowa alfabetu NATO, połącz je",
+    "bez spacji i dodaj trzy cyfry. Łącznie część literowa ma mieć 7-20 liter.",
+    "Koniecznie pokaż w zwykłej treści odpowiedzi poprawny znacznik",
+    "MCP_NICK:@@@TWOJWYBRANYNICK123@@@, zastępując ten przykład rzeczywistym nickiem.",
+    "Nie umieszczaj go wyłącznie w bloku kodu. Rejestr przeglądarki wyłapie go jako",
+    "kandydaturę, a powiązanie z MCP_ID musi zostać potwierdzone przez MCP.",
     "Wykonaj rejestrację we właściwym mechanizmie MCP, a następnie podaj katalog",
     "i faktyczny wynik zgłoszenia. Nie odczytuj bezpośrednio bazy SQLite Nadzoru."
   ].join(" ");
@@ -25,6 +31,14 @@
   let navRoot = null;
   let scanQueued = false;
   let loadRunning = false;
+  const profiles=Object.create(null);
+  const originalTitles=new WeakMap();
+  let profileLoadRunning=false;
+  let profileLoadAt=0;
+  let lastProfileSignature="";
+  let observationLastAt=0;
+  let observationLastSuccess="";
+  let observationLastTryAt=0;
 
   function ageMinutes(value) {
     const ms = Date.parse(value || "");
@@ -88,6 +102,151 @@
     return {fill,info:"Ostatnia modyfikacja pliku: "+elapsed+" temu",
             minute:Math.floor(min)};
   }
+  function titleTextNode(link) {
+    const walker=document.createTreeWalker(link,NodeFilter.SHOW_TEXT);
+    let node,best=null,bestScore=-1;
+    while ((node=walker.nextNode())) {
+      const content=(node.nodeValue||"").trim();
+      const parent=node.parentElement;
+      if (!parent || !content || content.length>240 ||
+          parent.closest("button,[role='button'],svg,[aria-hidden='true']")) continue;
+      let score=content.length;
+      if (/truncate|overflow-hidden/i.test(parent.className||""))score+=60;
+      if (score>bestScore){bestScore=score;best=node;}
+    }
+    return best;
+  }
+  function originalTitle(link) {
+    let rec=originalTitles.get(link);
+    if (rec && link.contains(rec.node)) {
+      const now=rec.node.nodeValue;
+      if (now!==rec.applied && now!==rec.original) rec.original=now;
+      return rec.original.trim();
+    }
+    const node=titleTextNode(link);
+    return node ? (node.nodeValue||"").trim() : "";
+  }
+  function showImeno(link,profile) {
+    if (!profile) return;
+    const imeno=typeof profile.imeno==="string" ? profile.imeno.trim() : "";
+    let rec=originalTitles.get(link);
+    if (rec && !link.contains(rec.node)) {
+      originalTitles.delete(link);rec=null;
+    }
+    if (!imeno) {
+      if (rec && rec.node.nodeValue===rec.applied)rec.node.nodeValue=rec.original;
+      originalTitles.delete(link);
+      return;
+    }
+    if (!rec) {
+      const node=titleTextNode(link);
+      if (!node)return;
+      rec={node,original:node.nodeValue,applied:""};
+      originalTitles.set(link,rec);
+    }
+    if (rec.node.nodeValue!==imeno) {
+      if (rec.node.nodeValue!==rec.applied)rec.original=rec.node.nodeValue;
+      rec.node.nodeValue=imeno;
+    }
+    rec.applied=imeno;
+    link.dataset.cgsImeno=imeno;
+  }
+  function profileFileActivity(profile) {
+    const folders=profile && Array.isArray(profile.folders) ? profile.folders : [];
+    let best=null;
+    for(const f of folders){
+      if (!f || !f.path)continue;
+      const item={
+        folder:f.path,host:f.host,
+        last_modified:f.file_last_modified_at||null,
+        observed_at:f.scanned_at||null,
+        error:f.scan_status && f.scan_status!=="OK" ? f.scan_status : null
+      };
+      if (!best || ((item.last_modified||"")>(best.last_modified||"")))
+        best=item;
+    }
+    return best;
+  }
+  function currentVisibleIds() {
+    const ids=[],set=new Set();
+    const id=currentUuid();
+    if (id){ids.push(id);set.add(id);}
+    for(const link of document.querySelectorAll("a[href*='/c/']")){
+      if (!isSidebarLink(link))continue;
+      const uuid=uuidForLink(link);
+      if (!uuid || set.has(uuid))continue;
+      set.add(uuid);ids.push(uuid);
+      if(ids.length>=180)break;
+    }
+    return ids;
+  }
+  async function refreshProfiles(force=false) {
+    if (profileLoadRunning)return;
+    const ids=currentVisibleIds();
+    if(!ids.length)return;
+    const signature=ids.join(",");
+    if (!force && signature===lastProfileSignature &&
+        Date.now()-profileLoadAt<24000)return;
+    profileLoadRunning=true;
+    try {
+      const data=await browser.runtime.sendMessage({
+        type:"SUP_PROFILE_GET",uuids:ids,force:!!force});
+      if (data && Array.isArray(data.items)) {
+        for(const p of data.items){
+          if (p && p.uuid)profiles[p.uuid.toLowerCase()]=p;
+        }
+        if(data.ok){lastProfileSignature=signature;profileLoadAt=Date.now();}
+        queueScan();
+      }
+    }catch(e){}finally{profileLoadRunning=false;}
+  }
+  function ownMcpNickFromAssistant() {
+    const assistantMessages=[...document.querySelectorAll(
+      "[data-message-author-role='assistant'],[data-testid*='assistant-message']"
+    )].slice(-3);
+    const found=new Set();
+    const marker=/(?:^|[^\p{L}0-9_])MCP_NICK:@@@([\p{L}]{7,20}[0-9]{3})@@@/gu;
+    for(const message of assistantMessages){
+      let text="",walker=document.createTreeWalker(message,NodeFilter.SHOW_TEXT),node;
+      while((node=walker.nextNode()) && text.length<12000){
+        if(node.parentElement && node.parentElement.closest("pre,code,blockquote"))continue;
+        text+=(node.nodeValue||"");
+      }
+      for(const match of text.matchAll(marker)){
+        found.add("MCP_NICK:@@@"+match[1].toUpperCase()+"@@@");
+      }
+    }
+    return found.size===1 ? [...found][0] : null;
+  }
+  async function observeCurrentChat() {
+    const uuid=currentUuid();
+    if(!uuid || document.hidden)return;
+    const now=Date.now();
+    if (now-observationLastTryAt<9000)return;
+    observationLastTryAt=now;
+    const link=[...document.querySelectorAll("a[href*='/c/']")]
+      .find(x=>isSidebarLink(x) && uuidForLink(x)===uuid);
+    let title=link ? originalTitle(link) : "";
+    if(!title || title===profiles[uuid]?.imeno){
+      const documentTitle=(document.title||"").replace(/\s*[-–|]\s*ChatGPT\s*$/i,"").trim();
+      if(documentTitle && documentTitle.toLowerCase()!=="chatgpt")
+        title=documentTitle;
+      else title="";
+    }
+    const declaration=ownMcpNickFromAssistant();
+    const signature=uuid+"|"+title+"|"+(declaration||"");
+    if(signature===observationLastSuccess && now-observationLastAt<300000)return;
+    try{
+      const result=await browser.runtime.sendMessage({
+        type:"SUP_BROWSER_OBSERVE",uuid,title,
+        ...(declaration?{mcp_nick_declaration:declaration}:{})
+      });
+      if(result && result.ok){
+        observationLastSuccess=signature;
+        observationLastAt=now;
+      }
+    }catch(e){}
+  }
   function currentUuid() {
     const m = UUID_PATH.exec(location.pathname);
     return m ? m[1].toLowerCase() : null;
@@ -100,27 +259,207 @@
   function isSidebarLink(a) {
     return !!a.closest("nav,aside,[data-testid*='sidebar'],[data-sidebar-item],[role='navigation']");
   }
+
+  const bulkSelected=new Set();
+  let bulkFilter="",bulkPanel=null,bulkResult=null,bulkBusy=false;
+  const normalized=value=>(value||"").normalize("NFKD").replace(/[\u0300-\u036f]/g,"").toLowerCase();
+  function sidebarRows(){
+    return [...document.querySelectorAll("a[href*='/c/']")]
+      .filter(a=>isSidebarLink(a)&&uuidForLink(a));
+  }
+  function applyBulkFilter(){
+    const term=normalized(bulkFilter.trim());
+    let shown=0;
+    for(const a of sidebarRows()){
+      const id=uuidForLink(a),name=originalTitle(a),imeno=profiles[id]?.imeno||"";
+      const match=!term||normalized(name).includes(term)||normalized(imeno).includes(term);
+      a.classList.toggle("cgs-filter-hidden",!match);
+      if(match)shown++;
+      const box=a.querySelector(".cgs-bulk-check");
+      if(box)box.checked=bulkSelected.has(id);
+    }
+    if(bulkPanel){
+      bulkPanel.querySelector(".cgs-bulk-counter").textContent=
+        bulkSelected.size+" zaznaczonych · "+shown+" widocznych";
+    }
+  }
+  function addBulkCheckbox(a){
+    if(a.querySelector(".cgs-bulk-check"))return;
+    const id=uuidForLink(a);
+    if(!id)return;
+    const checkbox=document.createElement("input");
+    checkbox.type="checkbox";checkbox.className="cgs-bulk-check";
+    checkbox.title="Zaznacz rozmowę";
+    checkbox.setAttribute("aria-label","Zaznacz rozmowę");
+    checkbox.checked=bulkSelected.has(id);
+    checkbox.addEventListener("click",e=>e.stopPropagation());
+    checkbox.addEventListener("pointerdown",e=>e.stopPropagation());
+    checkbox.addEventListener("change",e=>{
+      if(e.target.checked)bulkSelected.add(id);else bulkSelected.delete(id);
+      applyBulkFilter();
+    });
+    a.prepend(checkbox);
+  }
+  function bulkNotice(message,error=false){
+    if(bulkResult){bulkResult.textContent=message;bulkResult.dataset.error=error?"1":"0";}
+  }
+  async function bulkImportant(value){
+    const ids=[...bulkSelected];
+    if(!ids.length||bulkBusy)return;
+    if(!window.confirm("Ustawić important="+value+" dla "+ids.length+" rozmów?"))return;
+    bulkBusy=true;
+    let ok=0,failed=[];
+    try{
+      for(let i=0;i<ids.length;i++){
+        const uuid=ids[i],profile=profiles[uuid];
+        if(!profile){failed.push(uuid+": brak profilu");continue;}
+        try{
+          const result=await browser.runtime.sendMessage({
+            type:"SUP_PROFILE_UPDATE",uuid,field:"important",important:value,
+            expected_revision:profile.revision});
+          if(!result?.ok)throw new Error(result?.error||"API error");
+          ok++;bulkSelected.delete(uuid);
+          profiles[uuid]={...profile,important:value,
+            revision:typeof profile.revision==="number"?profile.revision+1:profile.revision};
+        }catch(e){failed.push(uuid+": "+(e.message||e));}
+        bulkNotice("important="+value+": "+(i+1)+"/"+ids.length+
+          ", sukces "+ok+", błędy "+failed.length);
+      }
+      await refreshProfiles(true);
+      applyBulkFilter();
+      bulkNotice("important="+value+": wykonano "+ok+"/"+ids.length+
+        ", błędy "+failed.length+(failed.length?" · "+failed.slice(0,2).join("; "):""),
+        failed.length>0);
+    }finally{bulkBusy=false;}
+  }
+  function bulkOpenTabs(){
+    const ids=[...bulkSelected];
+    if(!ids.length||bulkBusy)return;
+    if(ids.length>12&&!window.confirm("Otworzyć "+ids.length+" nowych kart?"))return;
+    // Browser may block window.open; each URL is grounded in an observed UUID.
+    for(const uuid of ids)window.open("https://chatgpt.com/c/"+uuid,"_blank","noopener");
+    bulkNotice("Zażądano otwarcia "+ids.length+" kart. Sprawdź blokadę wyskakujących okien.");
+  }
+  async function archiveOneSidebar(uuid){
+    const link=sidebarRows().find(a=>uuidForLink(a)===uuid);
+    if(!link)throw new Error("Rozmowa niewidoczna w panelu");
+    let more=null;
+    for(let node=link.parentElement,depth=0;node&&depth<4;node=node.parentElement,depth++){
+      more=[...node.querySelectorAll("button,[role='button']")]
+        .find(b=>/more|options|więcej|opcje|menu|actions/i.test(
+          [b.getAttribute("aria-label"),b.title,b.getAttribute("data-testid")].join(" "))&&
+          b.getClientRects().length>0);
+      if(more)break;
+    }
+    if(more)more.click();
+    else link.dispatchEvent(new MouseEvent("contextmenu",{
+      bubbles:true,cancelable:true,button:2,buttons:2,view:window}));
+    await new Promise(r=>setTimeout(r,450));
+    const menu=[...document.querySelectorAll("[role='menuitem']")]
+      .filter(e=>e.getClientRects().length>0).find(e=>{
+        const text=(e.textContent||"").trim().toLowerCase();
+        return text==="archiwizuj"||text==="archive"||text==="archive chat";
+      });
+    if(!menu)throw new Error("Nie znaleziono opcji archiwizacji");
+    menu.click();
+    await new Promise(r=>setTimeout(r,400));
+  }
+  async function bulkArchive(){
+    const ids=[...bulkSelected];
+    if(!ids.length||bulkBusy)return;
+    if(!window.confirm("Archiwizować "+ids.length+" rozmów w ChatGPT?"))return;
+    bulkBusy=true;
+    let invoked=0,errors=[];
+    try{
+      for(let i=0;i<ids.length;i++){
+        const uuid=ids[i];
+        try{await archiveOneSidebar(uuid);invoked++;bulkSelected.delete(uuid);}
+        catch(e){errors.push(uuid+": "+(e.message||e));}
+        bulkNotice("Archiwizacja "+(i+1)+"/"+ids.length+
+          "; wywołano "+invoked+"; błędy "+errors.length);
+      }
+      applyBulkFilter();
+      bulkNotice("Wywołano archiwizację "+invoked+"/"+ids.length+
+        ". Weryfikacja serwera ChatGPT nie jest dostępna."+
+        (errors.length?" "+errors.slice(0,2).join("; "):""),errors.length>0);
+    }finally{bulkBusy=false;}
+  }
+  function makeBulkPanel(){
+    if(bulkPanel?.isConnected)return;
+    const sidebar=document.getElementById("app-shell-sidebar")||
+      document.querySelector("aside,[data-testid*='sidebar']");
+    if(!sidebar)return;
+    const panel=document.createElement("section");
+    panel.id="cgs-bulk-panel";
+    panel.setAttribute("aria-label","Filtr i operacje zbiorcze rozmów");
+    const search=document.createElement("input");
+    search.type="search";search.placeholder="Filtr: tytuł lub imeno…";
+    search.className="cgs-bulk-search";search.value=bulkFilter;
+    search.addEventListener("input",()=>{bulkFilter=search.value;applyBulkFilter();});
+    panel.append(search);
+    const counter=document.createElement("div");
+    counter.className="cgs-bulk-counter";panel.append(counter);
+    const actions=document.createElement("div");actions.className="cgs-bulk-buttons";
+    function button(label,fn){
+      const b=document.createElement("button");b.type="button";b.textContent=label;
+      b.addEventListener("click",fn);actions.append(b);
+    }
+    button("Zaznacz widoczne",()=>{
+      for(const a of sidebarRows())if(!a.classList.contains("cgs-filter-hidden"))
+        bulkSelected.add(uuidForLink(a));
+      applyBulkFilter();
+    });
+    button("Odznacz widoczne",()=>{
+      for(const a of sidebarRows())if(!a.classList.contains("cgs-filter-hidden"))
+        bulkSelected.delete(uuidForLink(a));
+      applyBulkFilter();
+    });
+    button("Wyczyść wybór",()=>{bulkSelected.clear();applyBulkFilter();});
+    button("★ Ważne",()=>bulkImportant(1));
+    button("☆ Nieważne",()=>bulkImportant(0));
+    button("Otwórz karty",bulkOpenTabs);
+    button("Archiwizuj",bulkArchive);
+    panel.append(actions);
+    bulkResult=document.createElement("div");
+    bulkResult.className="cgs-bulk-result";
+    bulkResult.setAttribute("aria-live","polite");panel.append(bulkResult);
+    bulkPanel=panel;sidebar.prepend(panel);
+    applyBulkFilter();
+  }
+
   function scan() {
     for (const a of document.querySelectorAll("a[href*='/c/']")) {
       if (!isSidebarLink(a)) continue;
       const id = uuidForLink(a);
       if (!id) continue;
-      const item = states[id];
-      const cls = classify(item);
-      const activity = fileAgeColor(item && item.activity);
-      const leftRGB = STATUS_RGB[cls.color] || STATUS_RGB.gray;
-      const leftAlpha = cls.color==="gray" ? .12 : cls.color==="muted" ? .16 : .38;
-      const leftFill = rgba(leftRGB,leftAlpha);
-      const key = cls.color+"|"+leftFill+"|"+activity.fill+"|"+(activity.minute ?? "?");
-      if (a.dataset.cgsKey === key) continue;
+      addBulkCheckbox(a);
+      const item = states[id],profile=profiles[id];
+      // Changing a text NODE leaves the native link, menu and ordering intact.
+      showImeno(a,profile);
+      const cls=classify(item);
+      const important=profile && profile.important===1;
+      const activity=important
+        ? fileAgeColor((item && item.activity)||profileFileActivity(profile))
+        : {fill:"rgba(128,136,146,0.025)",
+           info:"important nie jest 1: bez dodatkowego monitoringu"};
+      const leftRGB=STATUS_RGB[cls.color]||STATUS_RGB.gray;
+      const leftAlpha=cls.color==="gray"?.12:cls.color==="muted"?.16:.38;
+      const leftFill=rgba(leftRGB,leftAlpha);
+      const key=cls.color+"|"+leftFill+"|"+activity.fill+"|"+
+        (activity.minute ?? "?")+"|"+(important?1:0)+"|"+(profile?.imeno||"");
+      if(a.dataset.cgsKey===key)continue;
       a.classList.remove(...STATUS_CLASSES);
-      a.classList.add("cgs-status-link","cgs-" + cls.color);
+      a.classList.add("cgs-status-link","cgs-"+cls.color);
+      a.classList.toggle("cgs-important",important);
       a.style.setProperty("--cgs-left-fill",leftFill);
       a.style.setProperty("--cgs-right-fill",activity.fill);
-      a.dataset.cgsKey = key;
-      a.dataset.cgsStatus = item ? item.status : "BRAK_W_BAZIE";
-      a.dataset.cgsLabel = cls.label+" | "+activity.info;
+      a.dataset.cgsKey=key;
+      a.dataset.cgsStatus=item?item.status:"BRAK_W_BAZIE";
+      a.dataset.cgsLabel=cls.label+" | "+activity.info+
+        (important?" | ważny":"")+
+        (profile?.imeno?" | imeno: "+profile.imeno:"");
     }
+    applyBulkFilter();
     updateToolbar();
   }
   function queueScan() {
@@ -168,6 +507,43 @@
       "[data-testid='prompt-textarea'][contenteditable='true'], " +
       "textarea#prompt-textarea,textarea[data-testid='prompt-textarea']"
     );
+  }
+  async function saveProfileField(field,value) {
+    const id=currentUuid(),profile=id && profiles[id];
+    if (!id || !profile || busy)return;
+    busy=true;updateToolbar();
+    try{
+      const result=await browser.runtime.sendMessage({
+        type:"SUP_PROFILE_UPDATE",uuid:id,field,
+        ...(field==="important"?{important:value}:{imeno:value}),
+        expected_revision:profile.revision
+      });
+      if(!result || !result.ok)
+        throw new Error((result&&result.error)||"Zapis niepotwierdzony");
+      toast(field==="important"
+        ? (value===1?"Oznaczono jako ważny.":"Oznaczono jako nieważny.")
+        : "Zapisano imeno.",false);
+      await refreshProfiles(true);
+    }catch(e){
+      toast("Imeno: "+(e.message||e),true);
+      await refreshProfiles(true);
+    }finally{busy=false;updateToolbar();}
+  }
+  function toggleImportance() {
+    const id=currentUuid(),profile=id && profiles[id];
+    if(!profile){toast("Brak danych profilu Neo4j.",true);return;}
+    saveProfileField("important",profile.important===1?0:1);
+  }
+  function editImeno() {
+    const id=currentUuid(),profile=id && profiles[id];
+    if(!profile){toast("Brak danych profilu Neo4j.",true);return;}
+    const value=window.prompt("Ustaw imeno rozmowy (1–120 znaków):",
+                              profile.imeno||"");
+    if(value===null)return;
+    const imeno=value.trim();
+    if(!imeno || imeno.length>120){toast("Imeno: wpisz 1–120 znaków.",true);return;}
+    if(imeno===profile.imeno)return;
+    saveProfileField("imeno",imeno);
   }
   function insertJoinPrompt() {
     const editor = composer();
@@ -283,6 +659,8 @@
     const actions = [
       {id:"join",text:"+",title:"Zgłoś do Nadzoru: wstaw polecenie do czatu",callback:insertJoinPrompt},
       {id:"leave",text:"−",title:"Wyrejestruj z Nadzoru",callback:unsubscribe},
+      {id:"important",text:"☆",title:"Oznacz czat jako ważny",callback:toggleImportance},
+      {id:"imeno",text:"✎",title:"Ustaw imeno",callback:editImeno},
       {id:"archive",text:"▣",title:"Archiwizuj rozmowę w ChatGPT",callback:archiveViaChatGPT}
     ];
     for(const action of actions){
@@ -310,22 +688,42 @@
     const join=toolbar.querySelector(".cgs-action-join");
     const leave=toolbar.querySelector(".cgs-action-leave");
     const archive=toolbar.querySelector(".cgs-action-archive");
+    const star=toolbar.querySelector(".cgs-action-important");
+    const edit=toolbar.querySelector(".cgs-action-imeno");
+    const profile=profiles[id];
     join.disabled=busy || status.registered;
     leave.disabled=busy || !status.registered || !connected;
     archive.disabled=busy;
+    star.disabled=busy || !profile;
+    edit.disabled=busy || !profile;
+    const important=profile && profile.important===1;
+    star.textContent=important?"★":"☆";
+    star.setAttribute("aria-pressed",important?"true":"false");
+    star.title=important?"Ważny: kliknij, aby ustawić 0"
+                        :"Kliknij, aby ustawić important=1";
+    star.dataset.important=profile && profile.important!==null
+                           ?String(profile.important):"null";
+    edit.title=profile?.imeno?"Imeno: "+profile.imeno:"Ustaw imeno rozmowy";
     toolbar.dataset.registered=status.registered ? "1":"0";
   }
   function tick() {
     if (location.pathname!==lastPath) {lastPath=location.pathname;queueScan();}
     watchSidebar();
+    makeBulkPanel();
     makeToolbar();
     scan();
+    refreshProfiles(false);
+    observeCurrentChat();
   }
   makeToolbar();
   watchSidebar();
+  makeBulkPanel();
   scan();
   refresh(true);
+  refreshProfiles(true);
   setInterval(tick,3000);
   setInterval(()=>refresh(false),15000);
-  document.addEventListener("visibilitychange",()=>{if(!document.hidden)refresh(true);});
+  document.addEventListener("visibilitychange",()=>{
+    if(!document.hidden){refresh(true);refreshProfiles(true);observeCurrentChat();}
+  });
 })();

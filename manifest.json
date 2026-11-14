@@ -1,27 +1,47 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT Supervisor Status",
-  "version": "0.3.1",
+  "version": "0.5.0",
   "description": "Statusy rozmow z bazy Nadzoru oraz zglaszanie, wyrejestrowanie MCP i archiwizowanie w ChatGPT.",
   "browser_specific_settings": {
     "gecko": {
       "id": "chatgpt-supervisor-status@lupus.local",
-      "strict_min_version": "115.0",
+      "strict_min_version": "142.0",
       "update_url": "https://raw.githubusercontent.com/Pawel-BoOssko/chatgpt-supervisor-firefox-releases/main/updates.json",
-      "data_collection_permissions": {"required":["none"]}
+      "data_collection_permissions": {
+        "required": [
+          "none"
+        ]
+      }
     }
   },
-  "permissions": ["storage"],
-  "host_permissions": ["http://127.0.0.1/*"],
-  "background": {"scripts": ["background.js"]},
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "scripts": [
+      "background.js"
+    ]
+  },
   "action": {
     "default_title": "Nadzor: statusy i akcje czatu",
     "default_popup": "popup.html"
   },
-  "content_scripts": [{
-    "matches": ["https://chatgpt.com/*"],
-    "js": ["content.js"],
-    "css": ["content.css"],
-    "run_at": "document_idle"
-  }]
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "content.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
 }

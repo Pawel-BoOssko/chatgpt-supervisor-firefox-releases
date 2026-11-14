@@ -2,7 +2,7 @@ name: Sign and publish Firefox extension
 on:
   push:
     branches: [autosync/SATANAMD-firefox-status]
-    paths: [manifest.json, background.js, content.js, content.css, popup.html, popup.js]
+    paths: [manifest.json, background.js, content.js, content.css, popup.html, popup.js, .github/workflows/sign-and-publish.yml]
   workflow_dispatch:
 permissions:
   contents: write
@@ -53,8 +53,19 @@ jobs:
         shell: bash
         run: |
           npm install --global web-ext@10
-          web-ext lint --source-dir bundle
+          web-ext lint --source-dir bundle --self-hosted
+      - name: Check Mozilla signing credentials
+        id: amo
+        shell: bash
+        run: |
+          if [ -n "$WEB_EXT_API_KEY" ] && [ -n "$WEB_EXT_API_SECRET" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::AMO API credentials not configured; signing will start after setup."
+          fi
       - name: Mozilla sign (unlisted only)
+        if: steps.amo.outputs.ready == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -65,6 +76,7 @@ jobs:
           SIGNED_FILE="$(find signed -maxdepth 1 -type f -name '*.xpi' -print -quit)"
           unzip -Z1 "$SIGNED_FILE" | grep -q '^META-INF/'
       - name: Publish signed XPI and update manifest
+        if: steps.amo.outputs.ready == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -88,6 +100,7 @@ jobs:
           git -C publish commit -m "Mozilla signed Firefox status $ADDON_VERSION"
           git -C publish push origin main
       - name: Preserve signed build artifact
+        if: steps.amo.outputs.ready == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: firefox-status-${{ github.run_number }}-signed
