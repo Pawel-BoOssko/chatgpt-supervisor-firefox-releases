@@ -91,6 +91,18 @@ async function getProfiles(uuids, force = false) {
                          .map(id=>profiles.get(id).item)};
 }
 
+async function enqueueWakeRequests(uuids){
+  if(!Array.isArray(uuids)||uuids.length<1||uuids.length>100||
+     uuids.some(id=>typeof id!=="string"||!UUID.test(id)))
+    return {ok:false,error:"Nieprawidłowa lista UUID (1–100)"};
+  try{
+    return await jsonRequest("/api/wake/request",{
+      method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({uuids:[...new Set(uuids.map(x=>x.toLowerCase()))]})
+    },12000);
+  }catch(e){return {ok:false,error:String(e.message||e)};}
+}
+
 async function leaveNadzor(uuid) {
   if (!UUID.test(uuid||"")) return {ok:false,error:"Nieprawidłowy UUID"};
   try {
@@ -216,6 +228,8 @@ browser.runtime.onMessage.addListener(message=>{
     return observeBrowser(message);
   if(message && message.type==="SUP_OPEN_TABS")
     return openChatTabs(message.uuids);
+  if(message && message.type==="SUP_WAKE_REQUEST")
+    return enqueueWakeRequests(message.uuids);
   if(message && message.type==="SUP_LEAVE")
     return leaveNadzor(message.uuid);
   return undefined;

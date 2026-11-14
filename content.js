@@ -196,7 +196,7 @@
           if (p && p.uuid)profiles[p.uuid.toLowerCase()]=p;
         }
         if(data.ok){lastProfileSignature=signature;profileLoadAt=Date.now();}
-        queueScan();
+        filterRenderRevision++;queueScan();
       }
     }catch(e){}finally{profileLoadRunning=false;}
   }
@@ -262,6 +262,14 @@
 
   const bulkSelected=new Set();
   let bulkFilter="",bulkPanel=null,bulkResult=null,bulkBusy=false;
+  const bulkFilters={importance:"all",work:"all",sort:"updated"};
+  let filterRenderRevision=0,projectTarget="";
+  const model=globalThis.CGSFilterModel;
+  const filtersActive=()=>!!bulkFilter.trim()||
+    bulkFilters.importance!=="all"||bulkFilters.work!=="all"||
+    bulkFilters.sort!=="updated";
+  const modelFilters=()=>({term:bulkFilter,...bulkFilters});
+
   const normalized=value=>(value||"").normalize("NFKD").replace(/[\u0300-\u036f]/g,"").toLowerCase();
 
   let bulkSurface=null,bulkSurfaceBasePadding="0px";
@@ -291,11 +299,12 @@
     }
   }
   function filteredItems(){
-    if(chatIndex)return chatIndex.search(bulkFilter,profiles);
+    const source=chatIndex?[...chatIndex.entries.values()]:
+      nativeSidebarRows().map(a=>({uuid:uuidForLink(a),
+        title:originalTitle(a),updated:0}));
+    if(model)return model.sorted(source,profiles,states,modelFilters());
     const term=normalized(bulkFilter.trim());
-    return nativeSidebarRows().map(a=>({
-      uuid:uuidForLink(a),title:originalTitle(a)
-    })).filter(item=>normalized(item.title).includes(term)||
+    return source.filter(item=>normalized(item.title).includes(term)||
       normalized(profiles[item.uuid]?.imeno||"").includes(term));
   }
   function filterResultsContainer(){
@@ -314,12 +323,12 @@
   function renderFilterResults(){
     const container=filterResultsContainer();
     if(!container)return;
-    const term=bulkFilter.trim();
-    if(!term){container.hidden=true;container.replaceChildren();return;}
+    if(!filtersActive()){container.hidden=true;container.replaceChildren();return;}
     container.hidden=false;
     const matches=filteredItems();
     const state=chatIndex?.snapshot();
-    const signature=[term,filterResultLimit,state?.revision||0,
+    const signature=[JSON.stringify(modelFilters()),filterResultLimit,
+      state?.revision||0,filterRenderRevision,
       [...bulkSelected].sort().join(","),matches.length].join("|");
     if(container.dataset.cgsSignature===signature)return;
     container.dataset.cgsSignature=signature;
@@ -327,6 +336,17 @@
     for(const item of matches.slice(0,filterResultLimit)){
       const row=document.createElement("div");
       row.className="cgs-result-row";
+      const status=classify(states[item.uuid]);
+      const important=profiles[item.uuid]?.important===1;
+      row.classList.add("cgs-"+status.color);
+      row.classList.toggle("cgs-important",important);
+      const activity=important?fileAgeColor(states[item.uuid]?.activity||
+        profileFileActivity(profiles[item.uuid])):null;
+      row.style.setProperty("--cgs-left-fill",rgba(STATUS_RGB[status.color]||
+        STATUS_RGB.gray,.28));
+      row.style.setProperty("--cgs-right-fill",activity?.fill||"transparent");
+      row.title=status.label+(important?" | Ważny":"")+
+        (activity?" | "+activity.info:"");
       row.dataset.cgsResultUuid=item.uuid;
       const checkbox=document.createElement("input");
       checkbox.type="checkbox";checkbox.className="cgs-result-check";
@@ -368,7 +388,7 @@
     if(!chatIndex)return;
     clearTimeout(filterSearchTimer);
     filterSearchTimer=setTimeout(()=>{
-      if(!bulkFilter.trim())return;
+      if(!filtersActive())return;
       chatIndex.load(force).catch(()=>queueScan());
     },250);
   }
@@ -403,14 +423,16 @@
   }
   function applyBulkFilter(){
     seedNativeIndex();
+    const active=filtersActive();
     const term=normalized(bulkFilter.trim());
     const sidebar=document.getElementById("app-shell-sidebar")||
       document.querySelector("aside,[data-testid*='sidebar']");
-    if(sidebar)sidebar.classList.toggle("cgs-search-active",!!term);
+    if(sidebar)sidebar.classList.toggle("cgs-search-active",active);
     let shown=0;
     for(const a of nativeSidebarRows()){
       const id=uuidForLink(a),name=originalTitle(a),imeno=profiles[id]?.imeno||"";
-      const match=!term||normalized(name).includes(term)||normalized(imeno).includes(term);
+      const match=!active||!model||model.passes({uuid:id,title:name},
+        profiles[id],states[id],modelFilters());
       a.classList.toggle("cgs-filter-hidden",!match);
       if(match)shown++;
       const box=a.querySelector(".cgs-bulk-check");
@@ -419,8 +441,8 @@
     renderFilterResults();
     if(bulkPanel){
       const state=chatIndex?.snapshot();
-      const matches=term?filteredItems().length:shown;
-      const summary=term
+      const matches=active?filteredItems().length:shown;
+      const summary=active
         ? matches+" wyników · "+(state?.size||shown)+" w indeksie"+
           (state?.loading?" · doczytuję…":state?.complete?" · pełny indeks":
            state?.loaded?" · indeks częściowy":" · lista widoczna")
@@ -429,7 +451,7 @@
         bulkSelected.size+" zaznaczonych · "+summary;
       const notice=bulkPanel.querySelector(".cgs-index-warning");
       if(notice){
-        notice.textContent=term && state?.error
+        notice.textContent=active && state?.error
           ?"Niepełny indeks: "+state.error:"";
         notice.hidden=!notice.textContent;
       }
@@ -564,6 +586,72 @@
         (errors.length?" "+errors.slice(0,2).join("; "):""),errors.length>0);
     }finally{bulkBusy=false;}
   }
+  async function bulkWake(){
+    const ids=[...bulkSelected];
+    if(!ids.length||bulkBusy)return;
+    if(!window.confirm("Dodać "+ids.length+
+      " rozmów do kolejki zgłoszeń wybudzania w Pozór Nadzór?"))return;
+    bulkBusy=true;
+    let created=0,existing=0,errors=[];
+    try{
+      for(let i=0;i<ids.length;i+=100){
+        const batch=ids.slice(i,i+100);
+        const response=await browser.runtime.sendMessage({
+          type:"SUP_WAKE_REQUEST",uuids:batch});
+        if(!response?.ok){
+          errors.push(response?.error||"Błąd zapisu kolejki");continue;
+        }
+        created+=response.queued||0;existing+=response.already||0;
+      }
+      bulkNotice("Zgłoszenia wybudzania: "+created+" nowych, "+existing+
+        " już zapisanych. Oczekują na obsługę przez Nadzór."+
+        (errors.length?" Błędy: "+errors.join("; "):""),errors.length>0);
+    }catch(e){bulkNotice("Wybudzanie: "+(e.message||e),true);}
+    finally{bulkBusy=false;}
+  }
+  async function bulkMoveToProject(){
+    const ids=[...bulkSelected],projectId=projectTarget;
+    if(!ids.length||bulkBusy)return;
+    const project=chatIndex?.projects().find(x=>x.id===projectId);
+    if(!project){bulkNotice("Wybierz prawidłowy projekt.",true);return;}
+    if(!window.confirm("Przenieść "+ids.length+" rozmów do projektu „"+
+      project.name+"”?"))return;
+    bulkBusy=true;
+    let moved=0,errors=[];
+    try{
+      for(let i=0;i<ids.length;i++){
+        const id=ids[i];
+        try{
+          await chatIndex.moveToProject(id,projectId);
+          moved++;bulkSelected.delete(id);
+        }catch(e){
+          errors.push(id+": "+(e.message||e));
+          if(/HTTP 429|HTTP 401|HTTP 403/.test(String(e.message||e)))break;
+        }
+        bulkNotice("Przenoszenie "+(i+1)+"/"+ids.length+
+          " · potwierdzono "+moved+" · błędy "+errors.length);
+        await new Promise(resolve=>setTimeout(resolve,350));
+      }
+      applyBulkFilter();
+      bulkNotice("Przeniesiono i zweryfikowano "+moved+"/"+ids.length+
+        " do „"+project.name+"”."+
+        (errors.length?" "+errors.slice(0,2).join("; "):""),errors.length>0);
+    }finally{bulkBusy=false;}
+  }
+  async function enqueueOneWake(){
+    const uuid=currentUuid();
+    if(!uuid||busy)return;
+    busy=true;updateToolbar();
+    try{
+      const result=await browser.runtime.sendMessage({
+        type:"SUP_WAKE_REQUEST",uuids:[uuid]});
+      if(!result?.ok)throw new Error(result?.error||"Błąd zgłoszenia");
+      toast(result.queued
+        ?"Zgłoszono do kolejki wybudzania; oczekuje na Nadzór."
+        :"Zgłoszenie już istnieje w kolejce Nadzoru.",false);
+    }catch(e){toast("Wybudzanie: "+(e.message||e),true);}
+    finally{busy=false;updateToolbar();}
+  }
   function makeBulkPanel(){
     const sidebar=document.getElementById("app-shell-sidebar")||
       document.querySelector("aside,[data-testid*='sidebar']");
@@ -599,8 +687,44 @@
     const search=document.createElement("input");
     search.type="search";search.placeholder="Filtr: tytuł lub imeno…";
     search.className="cgs-bulk-search";search.value=bulkFilter;
-    search.addEventListener("input",()=>{bulkFilter=search.value;filterResultLimit=100;applyBulkFilter();scheduleIndexLoad();});
+    search.addEventListener("input",()=>{
+      bulkFilter=search.value;filterResultLimit=100;
+      applyBulkFilter();scheduleIndexLoad();
+    });
     panel.append(search);
+    function filterButtons(label,key,options){
+      const line=document.createElement("div");
+      line.className="cgs-filter-line";
+      const heading=document.createElement("span");
+      heading.className="cgs-filter-heading";
+      heading.textContent=label;line.append(heading);
+      for(const [value,text] of options){
+        const b=document.createElement("button");
+        b.type="button";b.textContent=text;
+        b.className="cgs-filter-choice";
+        b.dataset.filterKey=key;b.dataset.filterValue=value;
+        b.setAttribute("aria-pressed",String(bulkFilters[key]===value));
+        b.addEventListener("click",()=>{
+          bulkFilters[key]=value;filterResultLimit=100;
+          for(const peer of line.querySelectorAll(".cgs-filter-choice"))
+            peer.setAttribute("aria-pressed",
+              String(peer.dataset.filterValue===value));
+          applyBulkFilter();scheduleIndexLoad();
+        });
+        line.append(b);
+      }
+      panel.append(line);
+    }
+    filterButtons("Ważność","importance",[
+      ["all","Wszystkie"],["important","★ Ważne"],
+      ["unimportant","☆ Nieważne"],["unset","? Nieustalone"]]);
+    filterButtons("Praca","work",[
+      ["all","Wszystkie"],["working","Pracują"],
+      ["waking","Wybudzane"],["notworking","Niepracujące"],
+      ["attention","Wymagają reakcji"],["outside","Poza Nadzorem"]]);
+    filterButtons("Ostatnia praca","sort",[
+      ["updated","Domyślnie"],["work-desc","↓ Malejąco"],
+      ["work-asc","↑ Rosnąco"]]);
     const counter=document.createElement("div");
     counter.className="cgs-bulk-counter";panel.append(counter);
     const actions=document.createElement("div");actions.className="cgs-bulk-buttons";
@@ -609,13 +733,13 @@
       b.addEventListener("click",fn);actions.append(b);
     }
     button("Zaznacz widoczne",()=>{
-      const ids=bulkFilter.trim()?filteredItems().map(item=>item.uuid):
+      const ids=filtersActive()?filteredItems().map(item=>item.uuid):
         nativeSidebarRows().filter(a=>!a.classList.contains("cgs-filter-hidden")).map(uuidForLink);
       for(const id of ids)bulkSelected.add(id);
       applyBulkFilter();
     });
     button("Odznacz widoczne",()=>{
-      const ids=bulkFilter.trim()?filteredItems().map(item=>item.uuid):
+      const ids=filtersActive()?filteredItems().map(item=>item.uuid):
         nativeSidebarRows().filter(a=>!a.classList.contains("cgs-filter-hidden")).map(uuidForLink);
       for(const id of ids)bulkSelected.delete(id);
       applyBulkFilter();
@@ -625,8 +749,37 @@
     button("☆ Nieważne",()=>bulkImportant(0));
     button("Otwórz karty",bulkOpenTabs);
     button("Archiwizuj",bulkArchive);
+    button("↻ Dodaj do wybudzania",bulkWake);
     button("Odśwież listę",()=>scheduleIndexLoad(true));
     panel.append(actions);
+    const projectRow=document.createElement("div");
+    projectRow.className="cgs-project-row";
+    const projectSelect=document.createElement("select");
+    projectSelect.className="cgs-project-select";
+    projectSelect.setAttribute("aria-label","Projekt docelowy");
+    const projectButton=document.createElement("button");
+    projectButton.type="button";projectButton.textContent="Przenieś do projektu";
+    projectButton.addEventListener("click",bulkMoveToProject);
+    projectRow.append(projectSelect,projectButton);panel.append(projectRow);
+    function updateProjectOptions(){
+      const current=projectSelect.value||projectTarget;
+      const projects=chatIndex?.projects()||[];
+      const options=[new Option(projects.length?"Wybierz projekt…":
+        "Brak projektów (odśwież)","")];
+      for(const project of projects)options.push(new Option(project.name,project.id));
+      projectSelect.replaceChildren(...options);
+      projectSelect.value=projects.some(x=>x.id===current)?current:"";
+      projectTarget=projectSelect.value;
+      projectButton.disabled=!projectTarget;
+    }
+    projectSelect.addEventListener("change",()=>{
+      projectTarget=projectSelect.value;projectButton.disabled=!projectTarget;
+    });
+    projectSelect.addEventListener("focus",()=>{
+      chatIndex?.loadProjectList().then(updateProjectOptions);
+    });
+    updateProjectOptions();
+    chatIndex?.loadProjectList().then(updateProjectOptions);
     bulkResult=document.createElement("div");
     bulkResult.className="cgs-bulk-result";
     bulkResult.setAttribute("aria-live","polite");panel.append(bulkResult);
@@ -697,6 +850,7 @@
       const data = await browser.runtime.sendMessage({type:"SUP_STATUS_GET",force:!!force});
       if (data && data.states && typeof data.states === "object") {
         states = data.states;
+        filterRenderRevision++;
         connected = data.connected === true;
         generatedAt = data.generated_at || "";
         scan();
@@ -873,6 +1027,7 @@
       {id:"join",text:"+",title:"Zgłoś do Nadzoru: wstaw polecenie do czatu",callback:insertJoinPrompt},
       {id:"leave",text:"−",title:"Wyrejestruj z Nadzoru",callback:unsubscribe},
       {id:"important",text:"☆",title:"Oznacz czat jako ważny",callback:toggleImportance},
+      {id:"wake",text:"↻",title:"Dodaj do wybudzania (zgłoszenie do Pozór Nadzór)",callback:enqueueOneWake},
       {id:"imeno",text:"✎",title:"Ustaw imeno",callback:editImeno},
       {id:"archive",text:"▣",title:"Archiwizuj rozmowę w ChatGPT",callback:archiveViaChatGPT}
     ];
@@ -901,12 +1056,14 @@
     const join=toolbar.querySelector(".cgs-action-join");
     const leave=toolbar.querySelector(".cgs-action-leave");
     const archive=toolbar.querySelector(".cgs-action-archive");
+    const wake=toolbar.querySelector(".cgs-action-wake");
     const star=toolbar.querySelector(".cgs-action-important");
     const edit=toolbar.querySelector(".cgs-action-imeno");
     const profile=profiles[id];
     join.disabled=busy || status.registered;
     leave.disabled=busy || !status.registered || !connected;
     archive.disabled=busy;
+    wake.disabled=busy;
     star.disabled=busy || !profile;
     edit.disabled=busy || !profile;
     const important=profile && profile.important===1;
@@ -937,6 +1094,6 @@
   setInterval(tick,3000);
   setInterval(()=>refresh(false),15000);
   document.addEventListener("visibilitychange",()=>{
-    if(!document.hidden){refresh(true);refreshProfiles(true);observeCurrentChat();if(bulkFilter.trim())scheduleIndexLoad();}
+    if(!document.hidden){refresh(true);refreshProfiles(true);observeCurrentChat();if(filtersActive())scheduleIndexLoad();}
   });
 })();
