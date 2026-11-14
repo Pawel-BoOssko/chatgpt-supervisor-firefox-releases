@@ -263,14 +263,151 @@
   const bulkSelected=new Set();
   let bulkFilter="",bulkPanel=null,bulkResult=null,bulkBusy=false;
   const normalized=value=>(value||"").normalize("NFKD").replace(/[\u0300-\u036f]/g,"").toLowerCase();
+
+  let bulkSurface=null,bulkSurfaceBasePadding="0px";
+  let filterResultLimit=100,filterSearchTimer=null;
+  const chatIndex=typeof globalThis.CGSCreateChatIndex==="function"
+    ? globalThis.CGSCreateChatIndex({
+      onUpdate:()=>queueScan(),
+      loadProfiles:async ids=>{
+        if(!ids.length)return;
+        try{
+          const data=await browser.runtime.sendMessage({
+            type:"SUP_PROFILE_GET",uuids:ids,force:false});
+          if(data?.ok && Array.isArray(data.items))
+            for(const p of data.items)if(p?.uuid)profiles[p.uuid.toLowerCase()]=p;
+        }catch(e){}
+      }
+    }):null;
+  function nativeSidebarRows(){
+    return sidebarRows().filter(a=>!a.closest("#cgs-filter-results"));
+  }
+  function seedNativeIndex(){
+    if(!chatIndex)return;
+    for(const a of nativeSidebarRows()){
+      const id=uuidForLink(a),title=originalTitle(a);
+      if(id&&title)chatIndex.add({uuid:id,title},"native");
+    }
+  }
+  function filteredItems(){
+    if(chatIndex)return chatIndex.search(bulkFilter,profiles);
+    const term=normalized(bulkFilter.trim());
+    return nativeSidebarRows().map(a=>({
+      uuid:uuidForLink(a),title:originalTitle(a)
+    })).filter(item=>normalized(item.title).includes(term)||
+      normalized(profiles[item.uuid]?.imeno||"").includes(term));
+  }
+  function filterResultsContainer(){
+    const scroll=document.querySelector(
+      "#app-shell-sidebar [data-app-action-sidebar-scroll]");
+    if(!scroll)return null;
+    let results=scroll.querySelector("#cgs-filter-results");
+    if(!results){
+      results=document.createElement("div");
+      results.id="cgs-filter-results";
+      results.setAttribute("aria-label","Wyniki filtrowania rozmów");
+      scroll.prepend(results);
+    }
+    return results;
+  }
+  function renderFilterResults(){
+    const container=filterResultsContainer();
+    if(!container)return;
+    const term=bulkFilter.trim();
+    if(!term){container.hidden=true;container.replaceChildren();return;}
+    container.hidden=false;
+    const matches=filteredItems();
+    const state=chatIndex?.snapshot();
+    const signature=[term,filterResultLimit,state?.revision||0,
+      [...bulkSelected].sort().join(","),matches.length].join("|");
+    if(container.dataset.cgsSignature===signature)return;
+    container.dataset.cgsSignature=signature;
+    const fragment=document.createDocumentFragment();
+    for(const item of matches.slice(0,filterResultLimit)){
+      const row=document.createElement("div");
+      row.className="cgs-result-row";
+      row.dataset.cgsResultUuid=item.uuid;
+      const checkbox=document.createElement("input");
+      checkbox.type="checkbox";checkbox.className="cgs-result-check";
+      checkbox.checked=bulkSelected.has(item.uuid);
+      checkbox.setAttribute("aria-label","Zaznacz rozmowę");
+      checkbox.addEventListener("change",()=>{
+        if(checkbox.checked)bulkSelected.add(item.uuid);
+        else bulkSelected.delete(item.uuid);
+        applyBulkFilter();
+      });
+      const link=document.createElement("a");
+      link.href="/c/"+item.uuid;
+      link.textContent=profiles[item.uuid]?.imeno||item.title;
+      link.title=item.title;
+      link.className="cgs-result-link";
+      row.append(checkbox,link);fragment.append(row);
+    }
+    if(matches.length>filterResultLimit){
+      const more=document.createElement("button");
+      more.type="button";more.className="cgs-results-more";
+      more.textContent="Pokaż kolejne ("+(matches.length-filterResultLimit)+")";
+      more.addEventListener("click",()=>{
+        filterResultLimit+=100;
+        renderFilterResults();
+      });
+      fragment.append(more);
+    }
+    if(!matches.length){
+      const empty=document.createElement("div");
+      empty.className="cgs-results-empty";
+      empty.textContent=state?.loading
+        ?"Wyszukiwanie w historii rozmów…"
+        :"Brak dopasowań w załadowanej historii.";
+      fragment.append(empty);
+    }
+    container.replaceChildren(fragment);
+  }
+  function scheduleIndexLoad(force=false){
+    if(!chatIndex)return;
+    clearTimeout(filterSearchTimer);
+    filterSearchTimer=setTimeout(()=>{
+      if(!bulkFilter.trim())return;
+      chatIndex.load(force).catch(()=>queueScan());
+    },250);
+  }
+  function positionBulkPanel(sidebar,panel){
+    if(!sidebar||!panel)return;
+    if(getComputedStyle(sidebar).position==="static")
+      sidebar.style.position="relative";
+    const newChat=[...sidebar.querySelectorAll(
+      "button[aria-label='Nowy czat'],button[aria-label='New chat']"
+    )].find(el=>el.getClientRects().length>0);
+    let surface=newChat;
+    while(surface && surface.parentElement!==sidebar)
+      surface=surface.parentElement;
+    if(!surface || surface===panel)
+      surface=sidebar.querySelector(":scope > div:has([data-sidebar-navigation-root])")||
+              sidebar.querySelector(":scope > div")||sidebar;
+    if(bulkSurface!==surface){
+      if(bulkSurface && bulkSurface!==sidebar)
+        bulkSurface.style.removeProperty("padding-top");
+      bulkSurface=surface;
+      bulkSurfaceBasePadding=getComputedStyle(surface).paddingTop||"0px";
+    }
+    const height=Math.ceil(panel.getBoundingClientRect().height||
+      panel.offsetHeight||190)+10;
+    const desired="calc("+bulkSurfaceBasePadding+" + "+height+"px)";
+    if(surface.style.getPropertyValue("padding-top")!==desired)
+      surface.style.setProperty("padding-top",desired,"important");
+  }
   function sidebarRows(){
     return [...document.querySelectorAll("a[href*='/c/']")]
       .filter(a=>isSidebarLink(a)&&uuidForLink(a));
   }
   function applyBulkFilter(){
+    seedNativeIndex();
     const term=normalized(bulkFilter.trim());
+    const sidebar=document.getElementById("app-shell-sidebar")||
+      document.querySelector("aside,[data-testid*='sidebar']");
+    if(sidebar)sidebar.classList.toggle("cgs-search-active",!!term);
     let shown=0;
-    for(const a of sidebarRows()){
+    for(const a of nativeSidebarRows()){
       const id=uuidForLink(a),name=originalTitle(a),imeno=profiles[id]?.imeno||"";
       const match=!term||normalized(name).includes(term)||normalized(imeno).includes(term);
       a.classList.toggle("cgs-filter-hidden",!match);
@@ -278,13 +415,27 @@
       const box=a.querySelector(".cgs-bulk-check");
       if(box)box.checked=bulkSelected.has(id);
     }
+    renderFilterResults();
     if(bulkPanel){
+      const state=chatIndex?.snapshot();
+      const matches=term?filteredItems().length:shown;
+      const summary=term
+        ? matches+" wyników · "+(state?.size||shown)+" w indeksie"+
+          (state?.loading?" · doczytuję…":state?.complete?" · pełny indeks":
+           state?.loaded?" · indeks częściowy":" · lista widoczna")
+        : shown+" widocznych";
       bulkPanel.querySelector(".cgs-bulk-counter").textContent=
-        bulkSelected.size+" zaznaczonych · "+shown+" widocznych";
+        bulkSelected.size+" zaznaczonych · "+summary;
+      const notice=bulkPanel.querySelector(".cgs-index-warning");
+      if(notice){
+        notice.textContent=term && state?.error
+          ?"Niepełny indeks: "+state.error:"";
+        notice.hidden=!notice.textContent;
+      }
     }
   }
   function addBulkCheckbox(a){
-    if(a.querySelector(".cgs-bulk-check"))return;
+    if(a.closest("#cgs-filter-results")||a.querySelector(".cgs-bulk-check"))return;
     const id=uuidForLink(a);
     if(!id)return;
     const checkbox=document.createElement("input");
@@ -345,62 +496,85 @@
     }catch(e){bulkNotice("Otwieranie kart: "+(e.message||e),true);}
     finally{bulkBusy=false;}
   }
+  function findArchiveMenuItem() {
+    return [...document.querySelectorAll(
+      "[role='menu'][data-state='open'] [role='menuitem'],[role='menuitem']"
+    )].filter(visible).find(el=>{
+      const label=(el.innerText||el.textContent||"").trim().toLowerCase();
+      return /^(archiwizuj|archive|archive chat|move to archive)$/.test(label);
+    });
+  }
+  async function waitUntil(predicate,timeoutMs=5000) {
+    const until=Date.now()+timeoutMs;
+    do {
+      if(predicate())return true;
+      await new Promise(resolve=>setTimeout(resolve,100));
+    }while(Date.now()<until);
+    return !!predicate();
+  }
   async function archiveOneSidebar(uuid){
-    const link=sidebarRows().find(a=>uuidForLink(a)===uuid);
-    if(!link)throw new Error("Rozmowa niewidoczna w panelu");
-    let more=null;
-    for(let node=link.parentElement,depth=0;node&&depth<4;node=node.parentElement,depth++){
-      more=[...node.querySelectorAll("button,[role='button']")]
-        .find(b=>/more|options|więcej|opcje|menu|actions/i.test(
-          [b.getAttribute("aria-label"),b.title,b.getAttribute("data-testid")].join(" "))&&
-          b.getClientRects().length>0);
-      if(more)break;
+    const link=sidebarRows().find(a=>uuidForLink(a)===uuid &&
+      !a.closest("#cgs-filter-results"));
+    if(!link)throw new Error("Rozmowa nie jest załadowana w natywnym panelu");
+    const row=link.closest("[data-sidebar-archive-chatgpt-id][role='group']")||
+              link.closest("[role='group']");
+    if(!row)throw new Error("Nie znaleziono wiersza rozmowy");
+    const buttonSelector=[
+      "button[aria-label='Działania na czacie']",
+      "button[aria-label='Chat actions']",
+      "button[aria-haspopup='menu']"
+    ].join(",");
+    let more=row.querySelector(buttonSelector);
+    if(!more){
+      row.dispatchEvent(new MouseEvent("mouseover",{bubbles:true,view:window}));
+      await new Promise(resolve=>setTimeout(resolve,250));
+      more=row.querySelector(buttonSelector);
     }
-    if(more)more.click();
-    else link.dispatchEvent(new MouseEvent("contextmenu",{
-      bubbles:true,cancelable:true,button:2,buttons:2,view:window}));
-    await new Promise(r=>setTimeout(r,450));
-    const menu=[...document.querySelectorAll("[role='menuitem']")]
-      .filter(e=>e.getClientRects().length>0).find(e=>{
-        const text=(e.textContent||"").trim().toLowerCase();
-        return text==="archiwizuj"||text==="archive"||text==="archive chat";
-      });
-    if(!menu)throw new Error("Nie znaleziono opcji archiwizacji");
-    menu.click();
-    await new Promise(r=>setTimeout(r,400));
+    if(!more)throw new Error("Nie znaleziono menu Działania na czacie");
+    more.click();
+    if(!await waitUntil(()=>!!findArchiveMenuItem(),2500))
+      throw new Error("Nie znaleziono opcji Archiwizuj w menu rozmowy");
+    const item=findArchiveMenuItem();
+    item.click();
+    // Do not report success merely because the menu item was clicked.
+    const disappeared=await waitUntil(()=>
+      ![...document.querySelectorAll("[data-sidebar-archive-chatgpt-id][role='group']")]
+        .some(el=>el===row || el.getAttribute("data-sidebar-archive-chatgpt-id")===uuid),
+      8000);
+    if(!disappeared)
+      throw new Error("Nie potwierdzono usunięcia rozmowy z listy po archiwizacji");
   }
   async function bulkArchive(){
     const ids=[...bulkSelected];
     if(!ids.length||bulkBusy)return;
     if(!window.confirm("Archiwizować "+ids.length+" rozmów w ChatGPT?"))return;
     bulkBusy=true;
-    let invoked=0,errors=[];
+    let archived=0,errors=[];
     try{
       for(let i=0;i<ids.length;i++){
         const uuid=ids[i];
-        try{await archiveOneSidebar(uuid);invoked++;bulkSelected.delete(uuid);}
+        try{await archiveOneSidebar(uuid);archived++;bulkSelected.delete(uuid);}
         catch(e){errors.push(uuid+": "+(e.message||e));}
         bulkNotice("Archiwizacja "+(i+1)+"/"+ids.length+
-          "; wywołano "+invoked+"; błędy "+errors.length);
+          "; potwierdzono "+archived+"; błędy "+errors.length);
       }
       applyBulkFilter();
-      bulkNotice("Wywołano archiwizację "+invoked+"/"+ids.length+
-        ". Weryfikacja serwera ChatGPT nie jest dostępna."+
+      bulkNotice("Zarchiwizowano i usunięto z panelu "+archived+"/"+ids.length+"."+
         (errors.length?" "+errors.slice(0,2).join("; "):""),errors.length>0);
     }finally{bulkBusy=false;}
   }
   function makeBulkPanel(){
-    if(bulkPanel?.isConnected)return;
     const sidebar=document.getElementById("app-shell-sidebar")||
       document.querySelector("aside,[data-testid*='sidebar']");
     if(!sidebar)return;
+    if(bulkPanel?.isConnected){positionBulkPanel(sidebar,bulkPanel);return;}
     const panel=document.createElement("section");
     panel.id="cgs-bulk-panel";
     panel.setAttribute("aria-label","Filtr i operacje zbiorcze rozmów");
     const search=document.createElement("input");
     search.type="search";search.placeholder="Filtr: tytuł lub imeno…";
     search.className="cgs-bulk-search";search.value=bulkFilter;
-    search.addEventListener("input",()=>{bulkFilter=search.value;applyBulkFilter();});
+    search.addEventListener("input",()=>{bulkFilter=search.value;filterResultLimit=100;applyBulkFilter();scheduleIndexLoad();});
     panel.append(search);
     const counter=document.createElement("div");
     counter.className="cgs-bulk-counter";panel.append(counter);
@@ -410,13 +584,15 @@
       b.addEventListener("click",fn);actions.append(b);
     }
     button("Zaznacz widoczne",()=>{
-      for(const a of sidebarRows())if(!a.classList.contains("cgs-filter-hidden"))
-        bulkSelected.add(uuidForLink(a));
+      const ids=bulkFilter.trim()?filteredItems().map(item=>item.uuid):
+        nativeSidebarRows().filter(a=>!a.classList.contains("cgs-filter-hidden")).map(uuidForLink);
+      for(const id of ids)bulkSelected.add(id);
       applyBulkFilter();
     });
     button("Odznacz widoczne",()=>{
-      for(const a of sidebarRows())if(!a.classList.contains("cgs-filter-hidden"))
-        bulkSelected.delete(uuidForLink(a));
+      const ids=bulkFilter.trim()?filteredItems().map(item=>item.uuid):
+        nativeSidebarRows().filter(a=>!a.classList.contains("cgs-filter-hidden")).map(uuidForLink);
+      for(const id of ids)bulkSelected.delete(id);
       applyBulkFilter();
     });
     button("Wyczyść wybór",()=>{bulkSelected.clear();applyBulkFilter();});
@@ -424,11 +600,15 @@
     button("☆ Nieważne",()=>bulkImportant(0));
     button("Otwórz karty",bulkOpenTabs);
     button("Archiwizuj",bulkArchive);
+    button("Odśwież listę",()=>scheduleIndexLoad(true));
     panel.append(actions);
     bulkResult=document.createElement("div");
     bulkResult.className="cgs-bulk-result";
     bulkResult.setAttribute("aria-live","polite");panel.append(bulkResult);
+    const warning=document.createElement("div");warning.className="cgs-index-warning";
+    warning.hidden=true;panel.append(warning);
     bulkPanel=panel;sidebar.prepend(panel);
+    positionBulkPanel(sidebar,panel);
     applyBulkFilter();
   }
 
