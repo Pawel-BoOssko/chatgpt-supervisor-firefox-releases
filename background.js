@@ -138,6 +138,21 @@ async function observeBrowser(action) {
   }catch(e){return {ok:false,error:String(e.message||e)};}
 }
 
+async function openChatTabs(uuids){
+  if(!Array.isArray(uuids)||!uuids.length||uuids.length>40)
+    return {ok:false,error:"invalid_tab_count"};
+  const ids=[...new Set(uuids)];
+  if(ids.some(id=>!UUID.test(id||"")))
+    return {ok:false,error:"invalid_uuid"};
+  let opened=0;const failures=[];
+  for(const uuid of ids){
+    try{await browser.tabs.create({url:"https://chatgpt.com/c/"+uuid.toLowerCase(),
+                                   active:false});opened++;}
+    catch(e){failures.push(uuid+": "+String(e.message||e));}
+  }
+  return {ok:failures.length===0,opened,failures};
+}
+
 browser.runtime.onMessage.addListener(message=>{
   if(message && message.type==="SUP_STATUS_GET")
     return getStatus(!!message.force);
@@ -147,6 +162,8 @@ browser.runtime.onMessage.addListener(message=>{
     return updateProfile(message);
   if(message && message.type==="SUP_BROWSER_OBSERVE")
     return observeBrowser(message);
+  if(message && message.type==="SUP_OPEN_TABS")
+    return openChatTabs(message.uuids);
   if(message && message.type==="SUP_LEAVE")
     return leaveNadzor(message.uuid);
   return undefined;
