@@ -363,9 +363,14 @@
       row.style.setProperty("--cgs-right-fill",activity?.fill||"transparent");
       const matchFrom=bulkFilter.trim()
         ?model?.matchField?.(item,profiles[item.uuid],bulkFilter):null;
+      const matchLabels={
+        title:"tytuł",imeno:"imeno","previous title":"poprzedni tytuł",
+        project:"projekt","working folder":"folder roboczy",
+        "identity name":"nazwa identyfikacyjna",uuid:"UUID"
+      };
       row.title=status.label+(important?" | Ważny":"")+
         (activity?" | "+activity.info:"")+
-        (matchFrom?" | Dopasowanie: "+matchFrom:"");
+        (matchFrom?" | Dopasowanie: "+(matchLabels[matchFrom]||matchFrom):"");
       row.dataset.cgsResultUuid=item.uuid;
       const checkbox=document.createElement("input");
       checkbox.type="checkbox";checkbox.className="cgs-result-check";
