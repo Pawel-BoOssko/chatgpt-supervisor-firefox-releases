@@ -550,3 +550,65 @@ a.cgs-status-link.cgs-important{
   font:11px system-ui,sans-serif!important;
   cursor:pointer!important;
 }
+
+/* Theme isolation: the sidecar must remain readable when ChatGPT/Firefox
+   advertises light-mode CSS variables. Never recolor the native ChatGPT UI. */
+#cgs-bulk-panel {
+  color-scheme:dark!important;
+  --main-surface-primary:#1b1d23;
+  --main-surface-secondary:#282c35;
+  --text-primary:#eff2f7;
+  --text-secondary:#bcc5d3;
+  --cgs-border:rgba(160,174,194,.42);
+  background:#1b1d23!important;
+  color:#eff2f7!important;
+  border-color:rgba(160,174,194,.38)!important;
+}
+#cgs-bulk-panel .cgs-build-label {
+  color:#dce6f5!important;
+}
+#cgs-bulk-panel .cgs-data-health,
+#cgs-bulk-panel .cgs-data-health-value {
+  color:#ecf2fa!important;
+}
+#cgs-bulk-panel .cgs-data-health {
+  background:#252a33!important;
+}
+#cgs-bulk-panel .cgs-filter-heading {
+  color:#c4ccda!important;
+}
+#cgs-bulk-panel .cgs-bulk-counter,
+#cgs-bulk-panel .cgs-bulk-result {
+  color:#eef2f7!important;
+}
+#cgs-bulk-panel .cgs-bulk-search,
+#cgs-bulk-panel .cgs-project-select,
+#cgs-bulk-panel .cgs-feedback textarea {
+  color:#eef2f7!important;
+  background:#282c35!important;
+  border-color:rgba(160,174,194,.5)!important;
+}
+#cgs-bulk-panel .cgs-bulk-search::placeholder {
+  color:#a9b4c5!important;
+  opacity:1!important;
+}
+#cgs-bulk-panel #cgs-status-actions {
+  background:#242730!important;
+  color:#ecf2fa!important;
+  border-color:rgba(160,174,194,.4)!important;
+}
+#cgs-bulk-panel #cgs-status-actions .cgs-legend {
+  color:#e2e8f1!important;
+}
+#cgs-bulk-panel button.cgs-filter-choice,
+#cgs-bulk-panel .cgs-bulk-buttons button,
+#cgs-bulk-panel .cgs-project-row button {
+  background:#2c303a!important;
+  border-color:rgba(160,174,194,.55)!important;
+  color:#edf0f6!important;
+}
+#cgs-bulk-panel button.cgs-filter-choice[aria-pressed="true"] {
+  background:#51421f!important;
+  border-color:#efc75b!important;
+  color:#fff0c3!important;
+}
