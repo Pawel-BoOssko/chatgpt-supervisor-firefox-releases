@@ -198,7 +198,8 @@
           if (p && p.uuid)profiles[p.uuid.toLowerCase()]=p;
         }
         if(data.ok){lastProfileSignature=signature;profileLoadAt=Date.now();}
-        filterRenderRevision++;queueScan();
+        filterRenderRevision++;
+        repaintTrackedRows(true);
       }
     }catch(e){}finally{profileLoadRunning=false;}
   }
@@ -292,8 +293,8 @@
       }
     }):null;
   function nativeSidebarRows(){
-    return sidebarRows().filter(a=>!a.closest("#cgs-filter-results")&&
-      !a.closest(".cgs-archived-row"));
+    return [...trackedSidebarLinks.values()].filter(a=>a.isConnected&&
+      !a.closest("#cgs-filter-results")&&!a.closest(".cgs-archived-row"));
   }
   function markArchivedLocal(uuid){
     const id=String(uuid||"").toLowerCase();
@@ -520,6 +521,7 @@
       }
     }
   }
+  const trackedSidebarLinks=new Map();
   const externalCheckboxes=new WeakSet();
   function externalBulkCheckbox(a){
     const row=a.closest("[data-sidebar-archive-chatgpt-id][role='group']")||
@@ -993,42 +995,56 @@
     applyBulkFilter();
   }
 
+  // Paint an already known row. Database updates must not rediscover the DOM.
+  function paintTrackedRow(a,id) {
+    if(archivedIds.has(id)){
+      (a.closest("[role='group']")||a).classList.add("cgs-archived-row");
+      return;
+    }
+    const item=states[id],profile=profiles[id];
+    showImeno(a,profile);
+    const cls=classify(item);
+    const important=profile && profile.important===1;
+    const activity=important
+      ? fileAgeColor((item && item.activity)||profileFileActivity(profile))
+      : {fill:"rgba(128,136,146,0.025)",
+         info:"important nie jest 1: bez dodatkowego monitoringu"};
+    const leftRGB=STATUS_RGB[cls.color]||STATUS_RGB.gray;
+    const leftAlpha=cls.color==="gray"?.12:cls.color==="muted"?.16:.38;
+    const leftFill=rgba(leftRGB,leftAlpha);
+    const key=cls.color+"|"+leftFill+"|"+activity.fill+"|"+
+      (activity.minute ?? "?")+"|"+(important?1:0)+"|"+(profile?.imeno||"");
+    if(a.dataset.cgsKey===key)return;
+    a.classList.remove(...STATUS_CLASSES);
+    a.classList.add("cgs-status-link","cgs-"+cls.color);
+    a.classList.toggle("cgs-important",important);
+    a.style.setProperty("--cgs-left-fill",leftFill);
+    a.style.setProperty("--cgs-right-fill",activity.fill);
+    a.dataset.cgsKey=key;
+    a.dataset.cgsStatus=item?item.status:"BRAK_W_BAZIE";
+    a.dataset.cgsLabel=cls.label+" | "+activity.info+
+      (important?" | wa?ny":"")+
+      (profile?.imeno?" | imeno: "+profile.imeno:"");
+  }
+  function repaintTrackedRows(reapplyFilters=false){
+    if(document.hidden)return;
+    for(const [id,a] of trackedSidebarLinks){
+      if(!a.isConnected)continue;
+      paintTrackedRow(a,id);
+    }
+    if(reapplyFilters)applyBulkFilter();
+    updateToolbar();
+  }
   function scan() {
-    if (document.hidden) return;
-    for (const a of document.querySelectorAll("a[href*='/c/']")) {
-      if (!isSidebarLink(a)) continue;
-      const id = uuidForLink(a);
-      if (!id) continue;
-      if(archivedIds.has(id)){
-        (a.closest("[role='group']")||a).classList.add("cgs-archived-row");
-        continue;
-      }
+    if(document.hidden)return;
+    trackedSidebarLinks.clear();
+    for(const a of sidebarRows()){
+      if(!isSidebarLink(a)||a.closest("#cgs-filter-results"))continue;
+      const id=uuidForLink(a);
+      if(!id)continue;
+      trackedSidebarLinks.set(id,a);
       addBulkCheckbox(a);
-      const item = states[id],profile=profiles[id];
-      // Changing a text NODE leaves the native link, menu and ordering intact.
-      showImeno(a,profile);
-      const cls=classify(item);
-      const important=profile && profile.important===1;
-      const activity=important
-        ? fileAgeColor((item && item.activity)||profileFileActivity(profile))
-        : {fill:"rgba(128,136,146,0.025)",
-           info:"important nie jest 1: bez dodatkowego monitoringu"};
-      const leftRGB=STATUS_RGB[cls.color]||STATUS_RGB.gray;
-      const leftAlpha=cls.color==="gray"?.12:cls.color==="muted"?.16:.38;
-      const leftFill=rgba(leftRGB,leftAlpha);
-      const key=cls.color+"|"+leftFill+"|"+activity.fill+"|"+
-        (activity.minute ?? "?")+"|"+(important?1:0)+"|"+(profile?.imeno||"");
-      if(a.dataset.cgsKey===key)continue;
-      a.classList.remove(...STATUS_CLASSES);
-      a.classList.add("cgs-status-link","cgs-"+cls.color);
-      a.classList.toggle("cgs-important",important);
-      a.style.setProperty("--cgs-left-fill",leftFill);
-      a.style.setProperty("--cgs-right-fill",activity.fill);
-      a.dataset.cgsKey=key;
-      a.dataset.cgsStatus=item?item.status:"BRAK_W_BAZIE";
-      a.dataset.cgsLabel=cls.label+" | "+activity.info+
-        (important?" | ważny":"")+
-        (profile?.imeno?" | imeno: "+profile.imeno:"");
+      paintTrackedRow(a,id);
     }
     applyBulkFilter();
     updateToolbar();
@@ -1056,16 +1072,49 @@
       scroll.scrollTop+=Math.sign(delta)*Math.min(38,Math.abs(delta)*.30);
     },{passive:false,capture:true});
   }
+  let sidebarMountObserver=null;
+  function waitForSidebarMount(){
+    if(sidebarMountObserver||!document.body)return;
+    sidebarMountObserver=new MutationObserver(records=>{
+      if(document.hidden)return;
+      const selector="#app-shell-sidebar,aside,[data-testid*='sidebar']";
+      if(!records.some(record=>[...record.addedNodes].some(node=>
+        node.nodeType===1 && (node.matches?.(selector)||
+        node.querySelector?.(selector)))))return;
+      sidebarMountObserver.disconnect();
+      sidebarMountObserver=null;
+      watchSidebar();
+      makeBulkPanel();
+      scan();
+    });
+    sidebarMountObserver.observe(document.body,{childList:true,subtree:true});
+  }
   function watchSidebar() {
-    const sidebar=document.getElementById("app-shell-sidebar")||
+    const root=document.getElementById("app-shell-sidebar")||
       document.querySelector("aside,[data-testid*='sidebar']");
-    gentleWheel(sidebar);
-    const root = document.querySelector("nav,aside,[data-testid*='sidebar']");
+    if(!root){waitForSidebarMount();return;}
+    if(sidebarMountObserver){
+      sidebarMountObserver.disconnect();sidebarMountObserver=null;
+    }
+    gentleWheel(root);
     if (root === navRoot) return;
     if (navObserver) navObserver.disconnect();
     navRoot = root;
     if (root) {
-      navObserver = new MutationObserver(queueScan);
+      navObserver = new MutationObserver(records=>{
+        if(document.hidden)return;
+        for(const record of records){
+          if(record.target.closest?.("#cgs-filter-results,#cgs-bulk-panel,#cgs-status-actions"))
+            continue;
+          if([...record.addedNodes,...record.removedNodes].some(node=>
+            node.nodeType===1 && (node.matches?.("a[href*='/c/']")||
+            node.querySelector?.("a[href*='/c/']")||
+            node.closest?.("a[href*='/c/']")))){
+            queueScan();
+            return;
+          }
+        }
+      });
       navObserver.observe(root,{childList:true,subtree:true});
     }
   }
@@ -1089,7 +1138,7 @@
         statusLoaded = true;
         statusError = connected?"":String(data.error||"Serwer statusów jest niedostępny");
         generatedAt = data.generated_at || "";
-        scan();
+        repaintTrackedRows(bulkFilters.work!=="all"||bulkFilters.sort!=="updated");
         if(!connected)scheduleStatusRetry();
         else if(statusRetryTimer!==null){
           clearTimeout(statusRetryTimer);statusRetryTimer=null;
@@ -1315,9 +1364,13 @@
   };
   const normalizeHeaderTitle=text=>normalized(String(text||""))
     .replace(/[–—-]/g," ").replace(/\s+/g," ").trim();
+  let cachedHeaderUuid=null,cachedHeaderAnchor=null;
   function nativeConversationTitleButton(){
     const id=currentUuid();
     if(!id)return null;
+    if(cachedHeaderUuid===id && cachedHeaderAnchor?.isConnected)
+      return cachedHeaderAnchor;
+    cachedHeaderUuid=null;cachedHeaderAnchor=null;
     const sidebar=document.getElementById("app-shell-sidebar")||
       document.querySelector("aside,[data-testid*='sidebar']");
     const edge=sidebar?.getBoundingClientRect().right||0;
@@ -1355,7 +1408,12 @@
       score-=Math.abs(rect.left-(edge+24))*.05;
       if(score>bestScore){bestScore=score;best=node;}
     }
-    return bestScore>=30?best:null;
+    if(bestScore>=30){
+      cachedHeaderUuid=id;
+      cachedHeaderAnchor=best;
+      return best;
+    }
+    return null;
   }
   function updateCurrentChatStatus(){
     const id=currentUuid();
@@ -1480,8 +1538,7 @@
     });
     observer.observe(document.body,{childList:true,subtree:true,
       attributes:true,attributeFilter:["data-state","aria-expanded"]});
-    // Fallback if React toggles a pre-existing menu without moving nodes.
-    setInterval(syncNativeMenu,1500);
+    // Native popup changes are observed above; no polling of the menu DOM.
   }
   function updateToolbar() {
     if (!toolbar) return;
@@ -1521,27 +1578,60 @@
     toolbar.dataset.registered=status.registered ? "1":"0";
     updateCurrentChatStatus();
   }
-  function tick() {
-    if (document.hidden) return;
-    if (location.pathname!==lastPath) {lastPath=location.pathname;queueScan();}
+  function onNavigationChange(){
+    if(document.hidden)return;
+    initializeVisibleUI();
     watchSidebar();
     makeBulkPanel();
     makeToolbar();
-    scan();
-    refreshProfiles(false);
-    observeCurrentChat();
+    if(location.pathname!==lastPath){
+      lastPath=location.pathname;
+      queueScan();
+      refreshProfiles(true);
+      observeCurrentChat();
+    }else{
+      queueScan();
+    }
   }
-  makeToolbar();
-  watchSidebar();
-  makeBulkPanel();
-  watchNativeMenus();
-  syncNativeMenu();
-  scan();
-  refresh(true);
-  refreshProfiles(true);
-  setInterval(tick,3000);
+  function scheduleNavigationCheck(){
+    setTimeout(onNavigationChange,0);
+    setTimeout(onNavigationChange,200);
+  }
+  let initialized=false;
+  function initializeVisibleUI(){
+    if(initialized||document.hidden)return;
+    initialized=true;
+    makeToolbar();
+    watchSidebar();
+    makeBulkPanel();
+    watchNativeMenus();
+    syncNativeMenu();
+    scan();
+    refresh(true);
+    refreshProfiles(true);
+  }
+  initializeVisibleUI();
+  // React navigation is handled by sidebar mutations and native navigation events.
+  window.addEventListener("popstate",onNavigationChange);
+  window.addEventListener("hashchange",onNavigationChange);
+  window.addEventListener("pageshow",onNavigationChange);
+  window.navigation?.addEventListener?.("navigatesuccess",onNavigationChange);
+  document.addEventListener("click",event=>{
+    if(event.target.closest?.("a[href*='/c/'],a[href='/']"))
+      scheduleNavigationCheck();
+  },true);
+  // Only server data is polled; no periodic DOM scans.
   setInterval(()=>{if(!document.hidden)refresh(false);},15000);
+  setInterval(()=>{if(!document.hidden)refreshProfiles(false);},60000);
   document.addEventListener("visibilitychange",()=>{
-    if(!document.hidden){tick();refresh(true);refreshProfiles(true);observeCurrentChat();if(filtersActive())scheduleIndexLoad();}
+    if(!document.hidden){
+      initializeVisibleUI();
+      onNavigationChange();
+      syncNativeMenu();
+      refresh(true);
+      refreshProfiles(true);
+      observeCurrentChat();
+      if(filtersActive())scheduleIndexLoad();
+    }
   });
 })();
