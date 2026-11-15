@@ -1352,7 +1352,8 @@
     const b=anchor.getBoundingClientRect();
     const left=b.right+12;
     // Never cover controls at the right edge of a narrow viewport.
-    activeStatusChip.hidden=left+145>window.innerWidth;
+    activeStatusChip.hidden=left+145>window.innerWidth ||
+      !!bulkPanel?.classList.contains("cgs-yield-to-native-menu");
     activeStatusChip.style.left=Math.round(left)+"px";
     activeStatusChip.style.top=Math.round(b.top+
       Math.max(0,(b.height-25)/2))+"px";
