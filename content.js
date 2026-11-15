@@ -829,8 +829,8 @@
       applyBulkFilter();
     });
     button("Wyczyść wybór",()=>{bulkSelected.clear();applyBulkFilter();});
-    button("★ Ważne",()=>bulkImportant(1));
-    button("☆ Nieważne",()=>bulkImportant(0));
+    button("Ustaw ★ ważne",()=>bulkImportant(1));
+    button("Ustaw ☆ nieważne",()=>bulkImportant(0));
     button("Otwórz karty",bulkOpenTabs);
     button("Archiwizuj",bulkArchive);
     button("↻ Dodaj do wybudzania",bulkWake);
@@ -1178,7 +1178,8 @@
     finally {busy=false;updateToolbar();}
   }
   function makeToolbar() {
-    if (toolbar || !document.body) return;
+    if (toolbar?.isConnected || !document.body) return;
+    toolbar=null;
     const node = document.createElement("div");
     node.id = "cgs-status-actions";
     node.setAttribute("role","group");
