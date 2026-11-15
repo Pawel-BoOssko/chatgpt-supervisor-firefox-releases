@@ -361,8 +361,11 @@
       row.style.setProperty("--cgs-left-fill",rgba(STATUS_RGB[status.color]||
         STATUS_RGB.gray,.28));
       row.style.setProperty("--cgs-right-fill",activity?.fill||"transparent");
+      const matchFrom=bulkFilter.trim()
+        ?model?.matchField?.(item,profiles[item.uuid],bulkFilter):null;
       row.title=status.label+(important?" | Ważny":"")+
-        (activity?" | "+activity.info:"");
+        (activity?" | "+activity.info:"")+
+        (matchFrom?" | Dopasowanie: "+matchFrom:"");
       row.dataset.cgsResultUuid=item.uuid;
       const checkbox=document.createElement("input");
       checkbox.type="checkbox";checkbox.className="cgs-result-check";
@@ -482,9 +485,11 @@
     if(sidebar)sidebar.classList.toggle("cgs-search-active",active);
     let shown=0;
     for(const a of nativeSidebarRows()){
-      const id=uuidForLink(a),name=originalTitle(a),imeno=profiles[id]?.imeno||"";
-      const match=!active||!model||model.passes({uuid:id,title:name},
-        profiles[id],states[id],modelFilters());
+      const id=uuidForLink(a),name=originalTitle(a);
+      const entry=chatIndex?.entries.get(id);
+      const match=!active||!model||model.passes({
+        uuid:id,title:name,project:entry?.project||""
+      },profiles[id],states[id],modelFilters());
       a.classList.toggle("cgs-filter-hidden",!match);
       if(match)shown++;
       const box=a.querySelector(".cgs-bulk-check");
@@ -813,7 +818,7 @@
     }).catch(()=>{buildLine.dataset.update="unknown";});
 
     const search=document.createElement("input");
-    search.type="search";search.placeholder="Filtr: tytuł lub imeno…";
+    search.type="search";search.placeholder="Tytuł, imeno, folder, projekt, alias…";
     search.className="cgs-bulk-search";search.value=bulkFilter;
     search.addEventListener("input",()=>{
       bulkFilter=search.value;filterResultLimit=100;
@@ -1225,6 +1230,18 @@
       logAction("error","single_archive",id+" "+(e.message||e),[id]);
     }finally{busy=false;updateToolbar();}
   }
+  async function openNewChatTab(){
+    const id=currentUuid();
+    const result=await browser.runtime.sendMessage({type:"SUP_NEW_CHAT_TAB"});
+    if(!result?.ok){
+      const error=result?.error||"Nie otwarto nowej karty";
+      logAction("error","new_chat_tab",error,[id].filter(Boolean));
+      toast("Nowy czat: "+error,true);
+      return;
+    }
+    logAction("result","new_chat_tab","Otwarto i aktywowano nową kartę ChatGPT",
+      [id].filter(Boolean));
+  }
   function makeToolbar() {
     if (toolbar?.isConnected || !document.body) return;
     toolbar=null;
@@ -1233,6 +1250,7 @@
     node.setAttribute("role","group");
     node.setAttribute("aria-label","Akcje Nadzoru i archiwizacji");
     const actions = [
+      {id:"new-chat",text:"↗",title:"Nowy czat w nowej karcie — otwórz i przejdź",callback:openNewChatTab},
       {id:"join",text:"+",title:"Zgłoś do Nadzoru: wstaw polecenie do czatu",callback:insertJoinPrompt},
       {id:"leave",text:"−",title:"Wyrejestruj z Nadzoru",callback:unsubscribe},
       {id:"important",text:"☆",title:"Oznacz czat jako ważny",callback:toggleImportance},
@@ -1461,9 +1479,14 @@
   function updateToolbar() {
     if (!toolbar) return;
     const id=currentUuid();
-    toolbar.hidden=!id;
+    toolbar.hidden=false;
+    const newChat=toolbar.querySelector(".cgs-action-new-chat");
+    if(newChat)newChat.disabled=false;
     if (!id){
       if(activeStatusChip)activeStatusChip.hidden=true;
+      for(const action of toolbar.querySelectorAll(".cgs-action"))
+        if(action!==newChat)action.disabled=true;
+      toolbar.dataset.registered="0";
       return;
     }
     const status=classify(states[id]);

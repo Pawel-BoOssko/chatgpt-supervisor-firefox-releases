@@ -9,6 +9,35 @@
   const TEAL=new Set(["DO_WYJASNIENIA","PYTANIE_JSON_1","PYTANIE_JSON_2",
     "PYTANIE_JSON_3"]);
   const OUTSIDE=new Set(["","POZA","BRAK_W_BAZIE"]);
+  function searchSources(entry={},profile={}){
+    const asList=value=>Array.isArray(value)?value:
+      typeof value==="string"?[value]:[];
+    const fields=[
+      ["title", [entry.title,profile?.ui_name,profile?.browser_title,
+                 profile?.sidebar_title]],
+      ["imeno", [profile?.imeno]],
+      ["previous title", asList(profile?.search_aliases)],
+      ["project", [entry.project,...asList(profile?.search_projects)]],
+      ["working folder", [
+        ...asList(profile?.search_folders),
+        ...asList(profile?.working_directories),
+        ...(Array.isArray(profile?.folders)?profile.folders.map(f=>f?.path):[])
+      ]],
+      ["identity name", asList(profile?.search_identities)],
+      ["uuid", [entry.uuid]]
+    ];
+    return fields.map(([field,values])=>({
+      field,values:values.filter(v=>typeof v==="string"&&v.trim())
+    }));
+  }
+  function matchField(entry,profile,term){
+    const query=norm(term||"").trim();
+    if(!query)return null;
+    for(const source of searchSources(entry,profile))
+      if(source.values.some(value=>norm(value).includes(query)))
+        return source.field;
+    return null;
+  }
   function workGroup(item){
     const status=String(item?.status||"").toUpperCase();
     if(status==="PRACUJE")return "working";
@@ -38,8 +67,7 @@
   }
   function passes(entry,profile,state,filters){
     const q=norm(filters.term||"").trim();
-    if(q && !norm(entry.title).includes(q) &&
-       !norm(profile?.imeno||"").includes(q))return false;
+    if(q && !matchField(entry,profile,q))return false;
     if(filters.importance && filters.importance!=="all" &&
        importanceGroup(profile)!==filters.importance)return false;
     const work=workGroup(state);
@@ -70,7 +98,7 @@
     return list;
   }
   root.CGSFilterModel=Object.freeze({
-    workGroup,importanceGroup,lastWorkMs,passes,sorted
+    workGroup,importanceGroup,lastWorkMs,searchSources,matchField,passes,sorted
   });
   if(typeof module!=="undefined"&&module.exports)
     module.exports=root.CGSFilterModel;

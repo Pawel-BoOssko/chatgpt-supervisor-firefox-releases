@@ -188,6 +188,19 @@ async function observeBrowser(action) {
   }catch(e){return {ok:false,error:String(e.message||e)};}
 }
 
+async function openNewChatTab(sender){
+  try{
+    const options={url:"https://chatgpt.com/",active:true};
+    const windowId=sender?.tab?.windowId;
+    if(Number.isInteger(windowId) && windowId>=0)options.windowId=windowId;
+    const tab=await browser.tabs.create(options);
+    if(!tab || !Number.isInteger(tab.id))
+      throw new Error("Nowa karta nie została potwierdzona");
+    return {ok:true,tabId:tab.id,windowId:tab.windowId};
+  }catch(e){
+    return {ok:false,error:String(e.message||e)};
+  }
+}
 async function openChatTabs(uuids){
   if(!Array.isArray(uuids)||!uuids.length||uuids.length>40)
     return {ok:false,error:"invalid_tab_count"};
@@ -253,7 +266,7 @@ async function getBuildStatus(force=false){
   finally{updateStatusInflight=null;}
 }
 
-browser.runtime.onMessage.addListener(message=>{
+browser.runtime.onMessage.addListener((message,sender)=>{
   if(message && message.type==="SUP_BUILD_STATUS")
     return getBuildStatus(!!message.force);
   if(message && message.type==="SUP_STATUS_GET")
@@ -266,6 +279,8 @@ browser.runtime.onMessage.addListener(message=>{
     return observeBrowser(message);
   if(message && message.type==="SUP_OPEN_TABS")
     return openChatTabs(message.uuids);
+  if(message && message.type==="SUP_NEW_CHAT_TAB")
+    return openNewChatTab(sender);
   if(message && message.type==="SUP_FEEDBACK")
     return saveFeedback(message.message);
   if(message && message.type==="SUP_LOG_EVENT")

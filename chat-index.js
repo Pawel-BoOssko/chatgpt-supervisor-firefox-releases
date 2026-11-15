@@ -39,10 +39,13 @@
     function search(term,profiles={}){
       const q=normalize(String(term||"").trim());
       if(!q)return [];
-      return [...entries.values()].filter(item=>
-        normalize(item.title).includes(q)||
-        normalize(profiles[item.uuid]?.imeno||"").includes(q))
-        .sort((a,b)=>b.updated-a.updated||a.title.localeCompare(b.title,"pl"));
+      return [...entries.values()].filter(item=>{
+        const profile=profiles[item.uuid]||{};
+        if(root.CGSFilterModel?.matchField)
+          return !!root.CGSFilterModel.matchField(item,profile,q);
+        return normalize(item.title).includes(q)||
+          normalize(profile.imeno||"").includes(q);
+      }).sort((a,b)=>b.updated-a.updated||a.title.localeCompare(b.title,"pl"));
     }
     function rememberProject(id,name){
       if(typeof id!=="string"||!/^g-p-[\w-]+$/i.test(id))return;
