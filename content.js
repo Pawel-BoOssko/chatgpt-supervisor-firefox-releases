@@ -914,16 +914,7 @@
       }finally{feedbackSend.disabled=false;}
     });
     feedback.append(feedbackTitle,feedbackInput,feedbackSend,feedbackStatus);
-    const dock=document.createElement("div");
-    dock.id="cgs-feedback-dock";
-    dock.style.width=Math.max(240,Math.min(390,
-      sidebar.getBoundingClientRect().width-12))+"px";
-    dock.append(feedback);
-    document.body.append(dock);
-    const updateDock=()=>{if(dock.isConnected)
-      dock.style.width=Math.max(240,Math.min(390,
-        sidebar.getBoundingClientRect().width-12))+"px";};
-    window.addEventListener("resize",updateDock,{passive:true});
+    panel.append(feedback);
     bulkPanel=panel;sidebar.prepend(panel);
     positionBulkPanel(sidebar,panel);
     if(typeof ResizeObserver!=="undefined")new ResizeObserver(()=>{
