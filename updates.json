@@ -3,9 +3,9 @@
     "chatgpt-supervisor-status@lupus.local": {
       "updates": [
         {
-          "version": "0.5.19",
-          "update_link": "https://raw.githubusercontent.com/Pawel-BoOssko/chatgpt-supervisor-firefox-releases/main/releases/ChatGPTSupervisorStatus-0.5.19-signed.xpi",
-          "update_hash": "sha256:9d94a7dde7dfcbc7f81fe88f8c7fc4faad6e1dfe4a789ec360e6afd6a97c9115"
+          "version": "0.5.20",
+          "update_link": "https://raw.githubusercontent.com/Pawel-BoOssko/chatgpt-supervisor-firefox-releases/main/releases/ChatGPTSupervisorStatus-0.5.20-signed.xpi",
+          "update_hash": "sha256:53f78d08ee9d53b9b302dedcbd4693799c6265d2ce8dd1322784fdfb808016fc"
         }
       ]
     }
