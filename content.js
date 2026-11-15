@@ -32,6 +32,7 @@
   let navObserver = null;
   let navRoot = null;
   let scanQueued = false;
+  let scanTimer = null;
   let loadRunning = false;
   const profiles=Object.create(null);
   const originalTitles=new WeakMap();
@@ -181,7 +182,7 @@
     return ids;
   }
   async function refreshProfiles(force=false) {
-    if (profileLoadRunning)return;
+    if (document.hidden||profileLoadRunning)return;
     const ids=currentVisibleIds();
     if(!ids.length)return;
     const signature=ids.join(",");
@@ -280,8 +281,9 @@
     ? globalThis.CGSCreateChatIndex({
       onUpdate:()=>queueScan(),
       shouldContinue:()=>!!bulkFilter.trim()&&!document.hidden,
+      isActive:()=>!document.hidden,
       loadProfiles:async ids=>{
-        if(!ids.length)return;
+        if(document.hidden||!ids.length)return;
         try{
           const data=await browser.runtime.sendMessage({
             type:"SUP_PROFILE_GET",uuids:ids,force:false});
@@ -408,10 +410,11 @@
     container.replaceChildren(fragment);
   }
   function scheduleIndexLoad(force=false){
-    if(!chatIndex)return;
+    if(!chatIndex||document.hidden)return;
     clearTimeout(filterSearchTimer);
     filterSearchTimer=setTimeout(()=>{
-      if(!filtersActive())return;
+      filterSearchTimer=null;
+      if(document.hidden||!filtersActive())return;
       chatIndex.load(force).catch(()=>queueScan());
     },250);
   }
@@ -419,6 +422,7 @@
   // Reserve its width in the conversation pane instead of pushing the
   // sidebar contents vertically. Restore any old inline padding on rebuild.
   let contentShiftTarget=null,contentShiftOriginal=null;
+  let panelResizeObserver=null;
   function contentPane(sidebar){
     const right=sidebar.getBoundingClientRect().right;
     const candidates=[...document.querySelectorAll(
@@ -981,14 +985,14 @@
     bulkPanel=panel;document.body.appendChild(panel);
     positionBulkPanel(sidebar,panel);
     if(typeof ResizeObserver!=="undefined"){
-      const resize=new ResizeObserver(()=>{
-        if(panel.isConnected)positionBulkPanel(sidebar,panel);
+      panelResizeObserver=new ResizeObserver(()=>{
+        if(!document.hidden&&panel.isConnected)positionBulkPanel(sidebar,panel);
       });
-      resize.observe(sidebar);
-      resize.observe(panel);
+      panelResizeObserver.observe(sidebar);
+      panelResizeObserver.observe(panel);
     }
     window.addEventListener("resize",()=>{
-      if(panel.isConnected)positionBulkPanel(sidebar,panel);
+      if(!document.hidden&&panel.isConnected)positionBulkPanel(sidebar,panel);
     },{passive:true});
     applyBulkFilter();
   }
@@ -1051,7 +1055,10 @@
     if (document.hidden) return;
     if (scanQueued) return;
     scanQueued = true;
-    setTimeout(() => {scanQueued=false; scan();}, 120);
+    scanTimer=setTimeout(() => {
+      scanQueued=false;scanTimer=null;
+      if(!document.hidden)scan();
+    }, 120);
   }
   const wheelBound=new WeakSet();
   function gentleWheel(sidebar){
@@ -1072,7 +1079,7 @@
   }
   let sidebarMountObserver=null;
   function waitForSidebarMount(){
-    if(sidebarMountObserver||!document.body)return;
+    if(document.hidden||sidebarMountObserver||!document.body)return;
     sidebarMountObserver=new MutationObserver(records=>{
       if(document.hidden)return;
       const selector="#app-shell-sidebar,aside,[data-testid*='sidebar']";
@@ -1088,6 +1095,7 @@
     sidebarMountObserver.observe(document.body,{childList:true,subtree:true});
   }
   function watchSidebar() {
+    if(document.hidden)return;
     const root=document.getElementById("app-shell-sidebar")||
       document.querySelector("aside,[data-testid*='sidebar']");
     if(!root){waitForSidebarMount();return;}
@@ -1095,7 +1103,7 @@
       sidebarMountObserver.disconnect();sidebarMountObserver=null;
     }
     gentleWheel(root);
-    if (root === navRoot) return;
+    if (root === navRoot && navObserver) return;
     if (navObserver) navObserver.disconnect();
     navRoot = root;
     if (root) {
@@ -1125,7 +1133,7 @@
     }
   }
   async function refresh(force) {
-    if (loadRunning) return;
+    if (document.hidden||loadRunning) return;
     loadRunning = true;
     try {
       const data = await browser.runtime.sendMessage({type:"SUP_STATUS_GET",force:!!force});
@@ -1499,7 +1507,11 @@
       syncNativeMenu();
     },25);
   }
+  let nativeMenuObserver=null,nativeMenuListenersAdded=false;
   function watchNativeMenus(){
+    if(document.hidden||!document.body||nativeMenuObserver)return;
+    if(!nativeMenuListenersAdded){
+      nativeMenuListenersAdded=true;
     document.addEventListener("pointerdown",event=>{
       if(event.target.closest("#cgs-bulk-panel,#cgs-status-actions"))return;
       scheduleNativeMenuSync();
@@ -1512,7 +1524,9 @@
         setTimeout(scheduleNativeMenuSync,160);
       }
     },true);
-    const observer=new MutationObserver(records=>{
+    }
+    nativeMenuObserver=new MutationObserver(records=>{
+      if(document.hidden)return;
       for(const record of records){
         if(record.type==="attributes"){
           if(record.target.matches?.(POPUP_SELECTOR)){
@@ -1529,7 +1543,7 @@
         }
       }
     });
-    observer.observe(document.body,{childList:true,subtree:true,
+    nativeMenuObserver.observe(document.body,{childList:true,subtree:true,
       attributes:true,attributeFilter:["data-state","aria-expanded"]});
     // Native popup changes are observed above; no polling of the menu DOM.
   }
@@ -1600,10 +1614,39 @@
     watchNativeMenus();
     syncNativeMenu();
     scan();
+  }
+  function suspendInvisibleUI(){
+    if(navObserver){navObserver.disconnect();navObserver=null;}
+    navRoot=null;
+    if(sidebarMountObserver){sidebarMountObserver.disconnect();sidebarMountObserver=null;}
+    if(nativeMenuObserver){nativeMenuObserver.disconnect();nativeMenuObserver=null;}
+    panelResizeObserver?.disconnect();
+    if(scanTimer!==null){clearTimeout(scanTimer);scanTimer=null;}
+    scanQueued=false;
+    if(popupSyncTimer!==null){clearTimeout(popupSyncTimer);popupSyncTimer=null;}
+    if(filterSearchTimer!==null){clearTimeout(filterSearchTimer);filterSearchTimer=null;}
+    chatIndex?.pause?.();
+    trackedSidebarLinks.clear();
+  }
+  function activateVisibleUI(){
+    if(document.hidden)return;
+    initializeVisibleUI();
+    watchSidebar();
+    watchNativeMenus();
+    if(panelResizeObserver && bulkPanel?.isConnected){
+      const root=document.getElementById("app-shell-sidebar")||
+        document.querySelector("aside,[data-testid*='sidebar']");
+      if(root)panelResizeObserver.observe(root);
+      panelResizeObserver.observe(bulkPanel);
+    }
+    onNavigationChange();
+    syncNativeMenu();
     refresh(true);
     refreshProfiles(true);
+    observeCurrentChat();
+    if(filtersActive())scheduleIndexLoad(true);
   }
-  initializeVisibleUI();
+  activateVisibleUI();
   // React navigation is handled by sidebar mutations and native navigation events.
   window.addEventListener("popstate",onNavigationChange);
   window.addEventListener("hashchange",onNavigationChange);
@@ -1615,14 +1658,7 @@
   },true);
   // No periodic data polling. Refresh on real user/navigation/visibility events only.
   document.addEventListener("visibilitychange",()=>{
-    if(!document.hidden){
-      initializeVisibleUI();
-      onNavigationChange();
-      syncNativeMenu();
-      refresh(true);
-      refreshProfiles(true);
-      observeCurrentChat();
-      if(filtersActive())scheduleIndexLoad();
-    }
+    if(document.hidden)suspendInvisibleUI();
+    else activateVisibleUI();
   });
 })();

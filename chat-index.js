@@ -6,14 +6,14 @@
   const normalize=x=>String(x||"").normalize("NFKD")
     .replace(/[\u0300-\u036f]/g,"").toLowerCase();
   function createChatIndex({fetchFn,onUpdate=()=>{},loadProfiles=async()=>{},
-                            shouldContinue=()=>false}={}){
+                            shouldContinue=()=>false,isActive=()=>true}={}){
     const request=fetchFn||(root.window?.fetch
       ? root.window.fetch.bind(root.window):root.fetch.bind(root));
     const entries=new Map(),profileLoadedIds=new Set(),projectCatalog=new Map();
     let projectListLoaded=false,projectListError="",projectListInflight=null;
     let loading=false,loaded=false,complete=false,error="",lastAt=0,revision=0;
     let projectsComplete=false,globalComplete=false,globalOffset=0;
-    let active=null,retryTimer=null,retryCount=0;
+    let active=null,retryTimer=null,retryCount=0,loadAbort=null,projectAbort=null;
     const notify=()=>{revision++;onUpdate();};
     function add(item,source="native"){
       const uuid=String(item?.uuid||item?.id||"").toLowerCase();
@@ -61,25 +61,29 @@
         error:projectListError,count:projectCatalog.size};
     }
     async function loadProjectList(force=false){
+      if(!isActive())return {ok:false,error:"paused_hidden",projects:projects()};
       if(projectListInflight)return projectListInflight;
       if(projectListLoaded&&!force)return {ok:true,projects:projects()};
+      const controller=new AbortController();
+      projectAbort=controller;
       projectListInflight=(async()=>{
         let token="",cursor="",page=0;
         projectListError="";
         try{
           const auth=await request("/api/auth/session",{
-            credentials:"include",cache:"no-store"});
+            credentials:"include",cache:"no-store",signal:controller.signal});
           if(!auth.ok)throw new Error("sesja HTTP "+auth.status);
           token=String((await auth.json()).accessToken||"");
           if(!token)throw new Error("brak tokenu sesji");
           do{
+            if(!isActive()||controller.signal.aborted)throw new Error("paused_hidden");
             if(++page>100)throw new Error("limit stron listy projektów");
             const params=new URLSearchParams({
               conversations_per_gizmo:"5",limit:"20",owned_only:"false"});
             if(cursor)params.set("cursor",cursor);
             const response=await request(
               "/backend-api/gizmos/snorlax/sidebar?"+params,{
-                credentials:"omit",cache:"no-store",
+                credentials:"omit",cache:"no-store",signal:controller.signal,
                 headers:{Authorization:"Bearer "+token}
               });
             if(!response.ok)throw new Error("HTTP "+response.status);
@@ -105,7 +109,10 @@
           projectListError=String(e.message||e);
           notify();
           return {ok:false,error:projectListError,projects:projects()};
-        }finally{token="";projectListInflight=null;}
+        }finally{
+          token="";projectListInflight=null;
+          if(projectAbort===controller)projectAbort=null;
+        }
       })();
       return projectListInflight;
     }
@@ -203,8 +210,13 @@
       return {size:entries.size,loading,loaded,complete,error,lastAt,revision,
         projectsComplete,globalComplete,globalOffset,retryCount};
     }
+    function pause(){
+      if(retryTimer){clearTimeout(retryTimer);retryTimer=null;}
+      if(loadAbort){loadAbort.abort();loadAbort=null;}
+      if(projectAbort){projectAbort.abort();projectAbort=null;}
+    }
     function scheduleRetry(){
-      if(complete||!shouldContinue()||retryCount>=8)return;
+      if(complete||!shouldContinue()||!isActive()||retryCount>=8)return;
       if(retryTimer)clearTimeout(retryTimer);
       const delay=Math.min(300000,30000*Math.pow(2,retryCount++));
       retryTimer=setTimeout(()=>{
@@ -213,27 +225,33 @@
       },delay);
     }
     async function load(force=false){
+      if(!isActive())return snapshot();
       if(loading)return active;
       if(!force && complete && Date.now()-lastAt<300000)return snapshot();
       if(!force && loaded && Date.now()-lastAt<30000)return snapshot();
       if(retryTimer){clearTimeout(retryTimer);retryTimer=null;}
       loading=true;error="";notify();
+      const controller=new AbortController();
+      loadAbort=controller;
       active=(async()=>{
         const problems=[];
         let token="";
         try{
-          const auth=await request("/api/auth/session",{credentials:"include",cache:"no-store"});
+          const auth=await request("/api/auth/session",{credentials:"include",
+            cache:"no-store",signal:controller.signal});
           if(!auth.ok)throw new Error("sesja HTTP "+auth.status);
           const session=await auth.json();
           token=String(session.accessToken||"");
           if(!token)throw new Error("brak tokenu sesji");
           let requestCount=0;
           async function api(path){
+            if(!isActive()||controller.signal.aborted)throw new Error("paused_hidden");
             if(!path.startsWith("/backend-api/"))throw new Error("invalid_api_path");
             if(requestCount++>=240)throw new Error("limit 240 odczytów API");
             await new Promise(resolve=>setTimeout(resolve,130));
+            if(!isActive()||controller.signal.aborted)throw new Error("paused_hidden");
             const res=await request(path,{credentials:"omit",cache:"no-store",
-              headers:{Authorization:"Bearer "+token}});
+              signal:controller.signal,headers:{Authorization:"Bearer "+token}});
             if(!res.ok)throw new Error("HTTP "+res.status+" dla "+
               path.split("?")[0].replace(/g-p-[\w-]+/g,"{projekt}"));
             return res.json();
@@ -319,6 +337,7 @@
           }
           const ids=[...entries.keys()].filter(id=>!profileLoadedIds.has(id));
           for(let i=0;i<ids.length;i+=150){
+            if(!isActive()||controller.signal.aborted)throw new Error("paused_hidden");
             const batch=ids.slice(i,i+150);
             try{await loadProfiles(batch);for(const id of batch)profileLoadedIds.add(id);}
             catch(e){problems.push("imeno: błąd odczytu profili");}
@@ -327,6 +346,7 @@
         }catch(e){problems.push("sesja: "+(e.message||e));}
         finally{
           token="";
+          if(loadAbort===controller)loadAbort=null;
           loading=false;loaded=true;lastAt=Date.now();
           complete=projectsComplete&&globalComplete;
           error=problems.join("; ").slice(0,800);
@@ -337,7 +357,7 @@
       })();
       return active;
     }
-    return {add,remove,search,load,snapshot,entries,projects,projectState,
+    return {add,remove,search,load,pause,snapshot,entries,projects,projectState,
       loadProjectList,verifyProject,markMoved,moveToProject,archiveChat};
   }
   root.CGSCreateChatIndex=createChatIndex;
