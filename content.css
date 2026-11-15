@@ -430,3 +430,6 @@ a .cgs-bulk-check,
 
 /* Keep expanded feedback reachable on short screens without covering chat rows. */
 #cgs-bulk-panel{max-height:calc(100vh - 85px)!important;overflow-y:auto!important;overscroll-behavior:contain!important;scrollbar-width:thin!important}
+
+/* Only hide after confirmed server-side archive; selection remains in memory. */
+.cgs-archived-row{display:none!important}

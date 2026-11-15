@@ -261,6 +261,7 @@
   }
 
   const bulkSelected=new Set();
+  const archivedIds=new Set();
   let bulkFilter="",bulkPanel=null,bulkResult=null,bulkBusy=false;
   const bulkFilters={importance:"all",work:"all",sort:"updated"};
   let filterRenderRevision=0,projectTarget="";
@@ -289,7 +290,18 @@
       }
     }):null;
   function nativeSidebarRows(){
-    return sidebarRows().filter(a=>!a.closest("#cgs-filter-results"));
+    return sidebarRows().filter(a=>!a.closest("#cgs-filter-results")&&
+      !a.closest(".cgs-archived-row"));
+  }
+  function markArchivedLocal(uuid){
+    const id=String(uuid||"").toLowerCase();
+    archivedIds.add(id);
+    for(const a of sidebarRows()){
+      if(uuidForLink(a)!==id)continue;
+      const row=a.closest("[role='group']")||a;
+      row.classList.add("cgs-archived-row");
+    }
+    queueScan();
   }
   function seedNativeIndex(){
     if(!chatIndex)return;
@@ -647,6 +659,7 @@
         try{
           if(!chatIndex?.archiveChat)throw new Error("Brak obsługi API archiwizacji");
           await chatIndex.archiveChat(uuid);
+          markArchivedLocal(uuid);
           archived++;
           logAction("result","archive",uuid+" serwer potwierdził",[uuid]);
         }
@@ -928,6 +941,10 @@
       if (!isSidebarLink(a)) continue;
       const id = uuidForLink(a);
       if (!id) continue;
+      if(archivedIds.has(id)){
+        (a.closest("[role='group']")||a).classList.add("cgs-archived-row");
+        continue;
+      }
       addBulkCheckbox(a);
       const item = states[id],profile=profiles[id];
       // Changing a text NODE leaves the native link, menu and ordering intact.
@@ -1106,6 +1123,12 @@
     busy = true;
     updateToolbar();
     try {
+      if(chatIndex?.archiveChat){
+        await chatIndex.archiveChat(id);
+        markArchivedLocal(id);
+        toast("Archiwizacja potwierdzona przez serwer.",false);
+        return;
+      }
       // ChatGPT's own conversation-header menu contains "Archiwizuj".
       // It works even when the conversation sidebar is collapsed.
       const sidebar = document.getElementById("app-shell-sidebar");
