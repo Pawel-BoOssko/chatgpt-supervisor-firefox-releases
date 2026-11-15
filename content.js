@@ -486,15 +486,23 @@
     try{
       for(let i=0;i<ids.length;i++){
         const uuid=ids[i],profile=profiles[uuid];
-        if(!profile){failed.push(uuid+": brak profilu");continue;}
+        if(!profile){
+          const fresh=await browser.runtime.sendMessage({
+            type:"SUP_PROFILE_GET",uuids:[uuid],force:true});
+          if(fresh?.items?.[0])profiles[uuid]=fresh.items[0];
+        }
+        const activeProfile=profiles[uuid]||{uuid,revision:0,important:null,imeno:null};
         try{
           const result=await browser.runtime.sendMessage({
             type:"SUP_PROFILE_UPDATE",uuid,field:"important",important:value,
-            expected_revision:profile.revision});
+            expected_revision:activeProfile.revision});
           if(!result?.ok)throw new Error(result?.error||"API error");
-          ok++;bulkSelected.delete(uuid);
-          profiles[uuid]={...profile,important:value,
-            revision:typeof profile.revision==="number"?profile.revision+1:profile.revision};
+          ok++;
+          profiles[uuid]={...activeProfile,important:value,
+            revision:Number.isInteger(result.revision)?result.revision:
+              typeof profile.revision==="number"?profile.revision+1:profile.revision};
+          logAction("result","important="+value,
+            uuid+" zapisano, revision="+profiles[uuid].revision,[uuid]);
         }catch(e){failed.push(uuid+": "+(e.message||e));}
         bulkNotice("important="+value+": "+(i+1)+"/"+ids.length+
           ", sukces "+ok+", błędy "+failed.length);
