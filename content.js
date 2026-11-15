@@ -423,7 +423,7 @@
   function positionBulkPanel(sidebar,panel){
     if(!sidebar||!panel||!panel.isConnected)return;
     const b=sidebar.getBoundingClientRect();
-    const top=Math.max(46,Math.round(b.top)+4);
+    const top=Math.max(96,Math.round(b.top)+54);
     const left=Math.max(4,Math.round(b.right)+8);
     // Keep the sidecar independent from the native sidebar at any zoom.
     const available=Math.max(250,window.innerWidth-left-120);
@@ -1258,11 +1258,186 @@
     toolbar=node;
     updateToolbar();
   }
+  // Live status of the UUID shown in the main ChatGPT conversation header.
+  // Keep this element outside React's own header so native menu clicks work.
+  let activeStatusChip=null;
+  const statusNames={
+    green:"Pracuje",red:"Wymaga reakcji",yellow:"Wybudzanie",
+    blue:"Kończy pracę",teal:"Do wyjaśnienia",muted:"Nieaktywny",
+    gray:"Poza Nadzorem"
+  };
+  const normalizeHeaderTitle=text=>normalized(String(text||""))
+    .replace(/[–—-]/g," ").replace(/\s+/g," ").trim();
+  function nativeConversationTitleButton(){
+    const id=currentUuid();
+    if(!id)return null;
+    const sidebar=document.getElementById("app-shell-sidebar")||
+      document.querySelector("aside,[data-testid*='sidebar']");
+    const edge=sidebar?.getBoundingClientRect().right||0;
+    const titleCandidates=[
+      profiles[id]?.ui_name,profiles[id]?.imeno,
+      ...nativeSidebarRows().filter(a=>uuidForLink(a)===id)
+        .map(a=>originalTitle(a)),
+      document.title.replace(/\s*[|–—]\s*ChatGPT.*$/i,"")
+    ].filter(Boolean).map(normalizeHeaderTitle);
+    let best=null,bestScore=-Infinity;
+    const candidates=document.querySelectorAll(
+      "button,[role='button'],[data-testid*='conversation-header']");
+    for(const node of candidates){
+      if(node.closest("#cgs-bulk-panel,#cgs-status-actions,#cgs-current-chat-status,"+
+        "#app-shell-sidebar,aside,nav,[role='menu']"))continue;
+      const rect=node.getBoundingClientRect();
+      if(!rect.width||!rect.height||rect.height>78||
+         rect.top<38||rect.top>135||rect.left<edge-2||
+         rect.left>Math.min(window.innerWidth-100,edge+780))continue;
+      const label=normalizeHeaderTitle(
+        (node.innerText||node.textContent||"").trim());
+      const aria=node.getAttribute("aria-haspopup");
+      const hint=normalizeHeaderTitle(
+        node.getAttribute("aria-label")||"");
+      const titleMatch=titleCandidates.some(t=>t.length>=6 &&
+        (label.includes(t)||t.includes(label)&&label.length>=6));
+      if(!titleMatch && !label.includes("rozmow") && !hint.includes("conversation") &&
+         !(aria&&aria!=="false"&&label.length>=6))continue;
+      let score=0;
+      if(titleMatch)score+=250;
+      if(aria==="menu"||aria==="true")score+=55;
+      if(node.tagName==="BUTTON")score+=20;
+      if(label.length>2)score+=Math.min(label.length,40);
+      if(node.closest("header,[data-testid*='header']"))score+=30;
+      score-=Math.abs(rect.left-(edge+24))*.05;
+      if(score>bestScore){bestScore=score;best=node;}
+    }
+    return bestScore>=30?best:null;
+  }
+  function updateCurrentChatStatus(){
+    const id=currentUuid();
+    if(!id){
+      if(activeStatusChip)activeStatusChip.hidden=true;
+      return;
+    }
+    const anchor=nativeConversationTitleButton();
+    if(!anchor){
+      if(activeStatusChip)activeStatusChip.hidden=true;
+      return;
+    }
+    if(!activeStatusChip){
+      const chip=document.createElement("div");
+      chip.id="cgs-current-chat-status";
+      chip.setAttribute("role","status");
+      chip.setAttribute("aria-label","Status bieżącego czatu w Nadzorze");
+      chip.setAttribute("aria-live","off");
+      const dot=document.createElement("span");
+      dot.className="cgs-current-status-dot";
+      dot.setAttribute("aria-hidden","true");
+      const title=document.createElement("span");
+      title.className="cgs-current-status-label";
+      chip.append(dot,title);
+      document.body.append(chip);
+      activeStatusChip=chip;
+    }
+    const status=classify(states[id]);
+    const important=profiles[id]?.important===1;
+    const visibleStatus=!states[id]?"Poza Nadzorem":
+      statusNames[status.color]||"Nieznany status";
+    const caption="Nadzór: "+visibleStatus+(important?" ★":"");
+    const label=activeStatusChip.querySelector(".cgs-current-status-label");
+    if(label.textContent!==caption)label.textContent=caption;
+    activeStatusChip.dataset.color=status.color;
+    const activity=fileAgeColor(states[id]?.activity||
+      profileFileActivity(profiles[id]));
+    const tip=status.label+(important?" | Ważny":"")+
+      " | "+activity.info+" | UUID: "+id;
+    if(activeStatusChip.title!==tip)activeStatusChip.title=tip;
+    const b=anchor.getBoundingClientRect();
+    const left=b.right+12;
+    // Never cover controls at the right edge of a narrow viewport.
+    activeStatusChip.hidden=left+145>window.innerWidth;
+    activeStatusChip.style.left=Math.round(left)+"px";
+    activeStatusChip.style.top=Math.round(b.top+
+      Math.max(0,(b.height-25)/2))+"px";
+    activeStatusChip.dataset.uuid=id;
+  }
+
+  // Native ChatGPT dropdowns must win over the fixed Supervisor sidecar.
+  const POPUP_SELECTOR=[
+    "[role='menu']","[role='listbox']",
+    "[data-radix-popper-content-wrapper]",
+    "[data-radix-menu-content]"
+  ].join(",");
+  let popupSyncTimer=null;
+  function popupIntersectsSidecar(){
+    if(!bulkPanel||!bulkPanel.isConnected)return false;
+    const b=bulkPanel.getBoundingClientRect();
+    if(!b.width||!b.height)return false;
+    for(const popup of document.querySelectorAll(POPUP_SELECTOR)){
+      if(popup.closest("#cgs-bulk-panel,#cgs-status-actions"))continue;
+      if(getComputedStyle(popup).display==="none"||
+         getComputedStyle(popup).visibility==="hidden")continue;
+      const r=popup.getBoundingClientRect();
+      if(r.width<30||r.height<16)continue;
+      if(r.left<b.right&&r.right>b.left&&r.top<b.bottom&&r.bottom>b.top)
+        return true;
+    }
+    return false;
+  }
+  function syncNativeMenu(){
+    if(!bulkPanel)return;
+    const nativeMenuOpen=popupIntersectsSidecar();
+    bulkPanel.classList.toggle("cgs-yield-to-native-menu",nativeMenuOpen);
+    if(activeStatusChip && nativeMenuOpen)activeStatusChip.hidden=true;
+    if(activeStatusChip && !nativeMenuOpen)updateCurrentChatStatus();
+  }
+  function scheduleNativeMenuSync(){
+    if(popupSyncTimer!==null)return;
+    popupSyncTimer=setTimeout(()=>{
+      popupSyncTimer=null;
+      syncNativeMenu();
+    },25);
+  }
+  function watchNativeMenus(){
+    document.addEventListener("pointerdown",event=>{
+      if(event.target.closest("#cgs-bulk-panel,#cgs-status-actions"))return;
+      scheduleNativeMenuSync();
+      setTimeout(scheduleNativeMenuSync,120);
+      setTimeout(scheduleNativeMenuSync,300);
+    },true);
+    document.addEventListener("keydown",event=>{
+      if(event.key==="Escape"||event.key==="Enter"||event.key===" "){
+        setTimeout(scheduleNativeMenuSync,35);
+        setTimeout(scheduleNativeMenuSync,160);
+      }
+    },true);
+    const observer=new MutationObserver(records=>{
+      for(const record of records){
+        if(record.type==="attributes"){
+          if(record.target.matches?.(POPUP_SELECTOR)){
+            scheduleNativeMenuSync();return;
+          }
+        }else{
+          for(const node of [...record.addedNodes,...record.removedNodes]){
+            if(node.nodeType!==1)continue;
+            if(node.matches?.(POPUP_SELECTOR)||
+               node.querySelector?.(POPUP_SELECTOR)){
+              scheduleNativeMenuSync();return;
+            }
+          }
+        }
+      }
+    });
+    observer.observe(document.body,{childList:true,subtree:true,
+      attributes:true,attributeFilter:["data-state","aria-expanded"]});
+    // Fallback if React toggles a pre-existing menu without moving nodes.
+    setInterval(syncNativeMenu,1500);
+  }
   function updateToolbar() {
     if (!toolbar) return;
     const id=currentUuid();
     toolbar.hidden=!id;
-    if (!id) return;
+    if (!id){
+      if(activeStatusChip)activeStatusChip.hidden=true;
+      return;
+    }
     const status=classify(states[id]);
     const join=toolbar.querySelector(".cgs-action-join");
     const leave=toolbar.querySelector(".cgs-action-leave");
@@ -1286,6 +1461,7 @@
                            ?String(profile.important):"null";
     edit.title=profile?.imeno?"Imeno: "+profile.imeno:"Ustaw imeno rozmowy";
     toolbar.dataset.registered=status.registered ? "1":"0";
+    updateCurrentChatStatus();
   }
   function tick() {
     if (location.pathname!==lastPath) {lastPath=location.pathname;queueScan();}
@@ -1299,6 +1475,8 @@
   makeToolbar();
   watchSidebar();
   makeBulkPanel();
+  watchNativeMenus();
+  syncNativeMenu();
   scan();
   refresh(true);
   refreshProfiles(true);

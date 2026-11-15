@@ -436,3 +436,48 @@ a .cgs-bulk-check,
 
 /* Detached sidecar: do not push down or occupy the native sidebar. */
 #cgs-bulk-panel{position:fixed!important;z-index:2147481000!important;box-sizing:border-box!important;max-height:calc(100vh - 60px)!important;overflow-y:auto!important;overscroll-behavior:contain!important;scrollbar-width:thin!important}
+
+
+/* 2026-11-15 — live current-chat status by native conversation title. */
+#cgs-current-chat-status{
+  position:fixed!important;
+  z-index:90!important;
+  display:inline-flex!important;align-items:center!important;
+  gap:6px!important;padding:4px 9px!important;
+  max-width:250px!important;min-height:24px!important;
+  border:1px solid rgba(150,156,167,.5)!important;
+  border-radius:20px!important;
+  background:var(--main-surface-secondary,#252630)!important;
+  color:var(--text-primary,#eee)!important;
+  box-shadow:0 1px 4px rgba(0,0,0,.18)!important;
+  font:600 11px/1.25 system-ui,sans-serif!important;
+  white-space:nowrap!important;
+  pointer-events:none!important;
+  user-select:none!important;
+}
+#cgs-current-chat-status[hidden]{display:none!important}
+#cgs-current-chat-status .cgs-current-status-dot{
+  display:inline-block!important;flex:0 0 9px!important;
+  width:9px!important;height:9px!important;
+  border-radius:50%!important;
+  background:#8b95a4!important;
+}
+#cgs-current-chat-status[data-color="green"] .cgs-current-status-dot{background:#19b77b!important}
+#cgs-current-chat-status[data-color="yellow"] .cgs-current-status-dot{background:#e2b438!important}
+#cgs-current-chat-status[data-color="red"] .cgs-current-status-dot{background:#ef535d!important}
+#cgs-current-chat-status[data-color="blue"] .cgs-current-status-dot{background:#4e9af1!important}
+#cgs-current-chat-status[data-color="teal"] .cgs-current-status-dot{background:#37c2bd!important}
+#cgs-current-chat-status[data-color="muted"] .cgs-current-status-dot{background:#596573!important}
+
+/* Native menu must render above the Supervisor; yield completely for overlap. */
+#cgs-bulk-panel{z-index:40!important}
+#cgs-bulk-panel.cgs-yield-to-native-menu{
+  visibility:hidden!important;
+  pointer-events:none!important;
+}
+body [role="menu"],
+body [role="listbox"],
+body [data-radix-popper-content-wrapper],
+body [data-radix-menu-content]{
+  z-index:2147483000!important;
+}
