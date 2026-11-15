@@ -337,6 +337,8 @@
       const row=document.createElement("div");
       row.className="cgs-result-row";
       const status=classify(states[item.uuid]);
+      row.style.setProperty("--cgs-result-color",
+        "rgb("+(STATUS_RGB[status.color]||STATUS_RGB.gray).join(",")+")");
       const important=profiles[item.uuid]?.important===1;
       row.classList.add("cgs-"+status.color);
       row.classList.toggle("cgs-important",important);
@@ -437,6 +439,7 @@
       if(match)shown++;
       const box=a.querySelector(".cgs-bulk-check");
       if(box)box.checked=bulkSelected.has(id);
+      // Foreign checkbox belongs to Bulk Delete: never synthesize clicks here.
     }
     renderFilterResults();
     if(bulkPanel){
@@ -457,10 +460,34 @@
       }
     }
   }
+  const externalCheckboxes=new WeakSet();
+  function externalBulkCheckbox(a){
+    const row=a.closest("[data-sidebar-archive-chatgpt-id][role='group']")||
+      a.closest("[role='group']")||a.parentElement;
+    return row?.querySelector("input.conversation-checkbox")||null;
+  }
   function addBulkCheckbox(a){
-    if(a.closest("#cgs-filter-results")||a.querySelector(".cgs-bulk-check"))return;
+    if(a.closest("#cgs-filter-results"))return;
     const id=uuidForLink(a);
     if(!id)return;
+    const external=externalBulkCheckbox(a);
+    if(external){
+      a.querySelector(".cgs-bulk-check")?.remove();
+      if(!externalCheckboxes.has(external)){
+        externalCheckboxes.add(external);
+        external.addEventListener("change",()=>{
+          if(external.checked)bulkSelected.add(id);
+          else bulkSelected.delete(id);
+          logAction("selection","Bulk Delete checkbox",
+            id+" "+(external.checked?"zaznaczono":"odznaczono"),[id]);
+          applyBulkFilter();
+        });
+        external.style.minWidth="22px";external.style.minHeight="22px";
+        external.title="Zaznaczenie współdzielone z ChatGPT Bulk Delete";
+      }
+      return;
+    }
+    if(a.querySelector(".cgs-bulk-check"))return;
     const checkbox=document.createElement("input");
     checkbox.type="checkbox";checkbox.className="cgs-bulk-check";
     checkbox.title="Zaznacz rozmowę";
@@ -474,8 +501,25 @@
     });
     a.prepend(checkbox);
   }
+  const actionHistory=[];
+  function logAction(event,action,detail="",uuids=[]){
+    const entry={event,action,detail:String(detail).slice(0,1200),
+      uuids:uuids.slice(0,250),selected:bulkSelected.size,
+      version:browser.runtime.getManifest?.()?.version||globalThis.CGS_BUILD_INFO?.version||"unknown"};
+    actionHistory.unshift({time:new Date().toLocaleTimeString("pl-PL"),
+      event,action,detail:entry.detail});
+    if(actionHistory.length>25)actionHistory.length=25;
+    const log=document.querySelector("#cgs-action-log");
+    if(log)log.replaceChildren(...actionHistory.map(x=>{
+      const row=document.createElement("div");
+      row.textContent=x.time+" · "+x.event+" · "+x.action+" · "+x.detail;
+      return row;
+    }));
+    browser.runtime.sendMessage({type:"SUP_LOG_EVENT",...entry}).catch(()=>{});
+  }
   function bulkNotice(message,error=false){
     if(bulkResult){bulkResult.textContent=message;bulkResult.dataset.error=error?"1":"0";}
+    logAction(error?"error":"progress","bulk_status",message,[...bulkSelected]);
   }
   async function bulkImportant(value){
     const ids=[...bulkSelected];
@@ -500,10 +544,14 @@
           ok++;
           profiles[uuid]={...activeProfile,important:value,
             revision:Number.isInteger(result.revision)?result.revision:
-              typeof profile.revision==="number"?profile.revision+1:profile.revision};
+              typeof activeProfile.revision==="number"?activeProfile.revision+1:
+              activeProfile.revision};
           logAction("result","important="+value,
             uuid+" zapisano, revision="+profiles[uuid].revision,[uuid]);
-        }catch(e){failed.push(uuid+": "+(e.message||e));}
+        }catch(e){
+          failed.push(uuid+": "+(e.message||e));
+          logAction("error","important="+value,uuid+": "+(e.message||e),[uuid]);
+        }
         bulkNotice("important="+value+": "+(i+1)+"/"+ids.length+
           ", sukces "+ok+", błędy "+failed.length);
       }
@@ -520,10 +568,22 @@
     if(ids.length>12&&!window.confirm("Otworzyć "+ids.length+" nowych kart?"))return;
     bulkBusy=true;
     try{
-      const result=await browser.runtime.sendMessage({type:"SUP_OPEN_TABS",uuids:ids});
-      bulkNotice("Otwarto "+(result?.opened||0)+"/"+ids.length+" kart."+
-        (result?.failures?.length?" Błędy: "+result.failures.slice(0,2).join("; "):""),
-        !result?.ok);
+      let opened=0,failures=[];
+      for(let i=0;i<ids.length;i+=20){
+        const batch=ids.slice(i,i+20);
+        const result=await browser.runtime.sendMessage({type:"SUP_OPEN_TABS",uuids:batch});
+        opened+=result?.opened||0;
+        failures.push(...(result?.failures||[]));
+        if(!result?.ok&&!result?.failures?.length)
+          failures.push("Partia "+(i/20+1)+": "+(result?.error||"brak odpowiedzi"));
+        logAction(result?.ok?"result":"error","open_tabs",
+          "partia "+(i/20+1)+" otwarto "+(result?.opened||0)+"/"+batch.length,batch);
+        bulkNotice("Otwieranie kart: "+opened+"/"+ids.length+
+          (failures.length?" · błędy "+failures.length:""),!!failures.length);
+      }
+      bulkNotice("Otwarto "+opened+"/"+ids.length+" kart."+
+        (failures.length?" Błędy: "+failures.slice(0,3).join("; "):""),
+        !!failures.length);
     }catch(e){bulkNotice("Otwieranie kart: "+(e.message||e),true);}
     finally{bulkBusy=false;}
   }
@@ -584,13 +644,18 @@
     try{
       for(let i=0;i<ids.length;i++){
         const uuid=ids[i];
-        try{await archiveOneSidebar(uuid);archived++;bulkSelected.delete(uuid);chatIndex?.remove(uuid);}
+        try{
+          if(!chatIndex?.archiveChat)throw new Error("Brak obsługi API archiwizacji");
+          await chatIndex.archiveChat(uuid);
+          archived++;
+          logAction("result","archive",uuid+" serwer potwierdził",[uuid]);
+        }
         catch(e){errors.push(uuid+": "+(e.message||e));}
         bulkNotice("Archiwizacja "+(i+1)+"/"+ids.length+
           "; potwierdzono "+archived+"; błędy "+errors.length);
       }
       applyBulkFilter();
-      bulkNotice("Zarchiwizowano i usunięto z panelu "+archived+"/"+ids.length+"."+
+      bulkNotice("Potwierdzono archiwizację na serwerze "+archived+"/"+ids.length+"."+
         (errors.length?" "+errors.slice(0,2).join("; "):""),errors.length>0);
     }finally{bulkBusy=false;}
   }
@@ -610,6 +675,8 @@
           errors.push(response?.error||"Błąd zapisu kolejki");continue;
         }
         created+=response.queued||0;existing+=response.already||0;
+        logAction("result","wake_request",
+          "nowe="+(response.queued||0)+" istniejące="+(response.already||0),batch);
       }
       bulkNotice("Zgłoszenia wybudzania: "+created+" nowych, "+existing+
         " już zapisanych. Oczekują na obsługę przez Nadzór."+
@@ -631,7 +698,7 @@
         const id=ids[i];
         try{
           await chatIndex.moveToProject(id,projectId);
-          moved++;bulkSelected.delete(id);
+          moved++;logAction("result","move_to_project",id+" → "+projectId,[id]);
         }catch(e){
           errors.push(id+": "+(e.message||e));
           if(/HTTP 429|HTTP 401|HTTP 403/.test(String(e.message||e)))break;
@@ -706,6 +773,9 @@
       const heading=document.createElement("span");
       heading.className="cgs-filter-heading";
       heading.textContent=label;line.append(heading);
+      const optionsWrap=document.createElement("div");
+      optionsWrap.className="cgs-filter-options";
+      line.append(optionsWrap);
       for(const [value,text] of options){
         const b=document.createElement("button");
         b.type="button";b.textContent=text;
@@ -717,9 +787,10 @@
           for(const peer of line.querySelectorAll(".cgs-filter-choice"))
             peer.setAttribute("aria-pressed",
               String(peer.dataset.filterValue===value));
+          logAction("click","filter_"+key,value,[...bulkSelected]);
           applyBulkFilter();scheduleIndexLoad();
         });
-        line.append(b);
+        optionsWrap.append(b);
       }
       panel.append(line);
     }
@@ -738,7 +809,12 @@
     const actions=document.createElement("div");actions.className="cgs-bulk-buttons";
     function button(label,fn){
       const b=document.createElement("button");b.type="button";b.textContent=label;
-      b.addEventListener("click",fn);actions.append(b);
+      b.addEventListener("click",()=>{
+        logAction("click",label,"button",[...bulkSelected]);
+        try{const result=fn();if(result?.catch)result.catch(e=>
+          logAction("error",label,String(e?.message||e),[...bulkSelected]));}
+        catch(e){logAction("error",label,String(e?.message||e),[...bulkSelected]);}
+      });actions.append(b);
     }
     button("Zaznacz widoczne",()=>{
       const ids=filtersActive()?filteredItems().map(item=>item.uuid):
@@ -767,7 +843,11 @@
     projectSelect.setAttribute("aria-label","Projekt docelowy");
     const projectButton=document.createElement("button");
     projectButton.type="button";projectButton.textContent="Przenieś do projektu";
-    projectButton.addEventListener("click",bulkMoveToProject);
+    projectButton.addEventListener("click",()=>{
+      logAction("click","Przenieś do projektu",projectTarget,[...bulkSelected]);
+      bulkMoveToProject().catch(e=>logAction("error","Przenieś do projektu",
+        String(e?.message||e),[...bulkSelected]));
+    });
     projectRow.append(projectSelect,projectButton);panel.append(projectRow);
     function updateProjectOptions(){
       const current=projectSelect.value||projectTarget;
@@ -793,10 +873,17 @@
     bulkResult.setAttribute("aria-live","polite");panel.append(bulkResult);
     const warning=document.createElement("div");warning.className="cgs-index-warning";
     warning.hidden=true;panel.append(warning);
+    const actionLog=document.createElement("details");
+    actionLog.className="cgs-action-history";
+    const actionSummary=document.createElement("summary");
+    actionSummary.textContent="Dziennik kliknięć i wyników";
+    const actionList=document.createElement("div");
+    actionList.id="cgs-action-log";
+    actionLog.append(actionSummary,actionList);panel.append(actionLog);
     const feedback=document.createElement("details");
     feedback.className="cgs-feedback";
     const feedbackTitle=document.createElement("summary");
-    feedbackTitle.textContent="Zgłoś uwagę lub błąd";
+    feedbackTitle.textContent="✎ Zgłoś uwagę / błąd";
     const feedbackInput=document.createElement("textarea");
     feedbackInput.placeholder="Opisz problem lub propozycję zmiany…";
     feedbackInput.maxLength=3000;
@@ -807,6 +894,7 @@
     feedbackStatus.className="cgs-feedback-status";
     feedbackStatus.setAttribute("role","status");
     feedbackSend.addEventListener("click",async()=>{
+      logAction("click","feedback","Zapisz zgłoszenie");
       const message=feedbackInput.value.trim();
       if(message.length<3){feedbackStatus.textContent="Wpisz co najmniej 3 znaki.";return;}
       feedbackSend.disabled=true;
@@ -818,13 +906,24 @@
         feedbackStatus.dataset.error="0";
         feedbackStatus.textContent="Zapisano lokalnie: "+response.id+
           ". Zgłoszenie nie zostało jeszcze wysłane do GitHub.";
+        logAction("result","feedback","Zapisano "+response.id);
       }catch(e){
         feedbackStatus.dataset.error="1";
         feedbackStatus.textContent="Błąd zapisu: "+(e.message||e);
+        logAction("error","feedback",String(e.message||e));
       }finally{feedbackSend.disabled=false;}
     });
     feedback.append(feedbackTitle,feedbackInput,feedbackSend,feedbackStatus);
-    panel.append(feedback);
+    const dock=document.createElement("div");
+    dock.id="cgs-feedback-dock";
+    dock.style.width=Math.max(240,Math.min(390,
+      sidebar.getBoundingClientRect().width-12))+"px";
+    dock.append(feedback);
+    document.body.append(dock);
+    const updateDock=()=>{if(dock.isConnected)
+      dock.style.width=Math.max(240,Math.min(390,
+        sidebar.getBoundingClientRect().width-12))+"px";};
+    window.addEventListener("resize",updateDock,{passive:true});
     bulkPanel=panel;sidebar.prepend(panel);
     positionBulkPanel(sidebar,panel);
     if(typeof ResizeObserver!=="undefined")new ResizeObserver(()=>{
@@ -873,7 +972,27 @@
     scanQueued = true;
     setTimeout(() => {scanQueued=false; scan();}, 120);
   }
+  const wheelBound=new WeakSet();
+  function gentleWheel(sidebar){
+    if(!sidebar||wheelBound.has(sidebar))return;
+    wheelBound.add(sidebar);
+    sidebar.addEventListener("wheel",event=>{
+      if(event.ctrlKey||event.shiftKey||
+        event.target.closest("#cgs-bulk-panel,#cgs-feedback-dock"))return;
+      const scroll=event.target.closest("[data-app-action-sidebar-scroll]")||
+        sidebar.querySelector("[data-app-action-sidebar-scroll]");
+      if(!scroll)return;
+      const delta=event.deltaY*(event.deltaMode===1?16:event.deltaMode===2?
+        Math.max(scroll.clientHeight,400):1);
+      if(Math.abs(delta)<80)return; // retain natural precision scrolling
+      event.preventDefault();
+      scroll.scrollTop+=Math.sign(delta)*Math.min(38,Math.abs(delta)*.30);
+    },{passive:false,capture:true});
+  }
   function watchSidebar() {
+    const sidebar=document.getElementById("app-shell-sidebar")||
+      document.querySelector("aside,[data-testid*='sidebar']");
+    gentleWheel(sidebar);
     const root = document.querySelector("nav,aside,[data-testid*='sidebar']");
     if (root === navRoot) return;
     if (navObserver) navObserver.disconnect();
@@ -904,6 +1023,7 @@
     node.textContent = message;
     node.dataset.error = error ? "1" : "0";
     node.hidden = false;
+    logAction(error?"error":"result","single_status",message,[currentUuid()].filter(Boolean));
     clearTimeout(toast.timeout);
     toast.timeout = setTimeout(() => {node.hidden=true;}, 4500);
   }
@@ -1076,13 +1196,37 @@
       b.type="button";b.className="cgs-action cgs-action-"+action.id;
       b.textContent=action.text;
       b.setAttribute("aria-label",action.title);b.title=action.title;
-      b.addEventListener("click",e=>{e.preventDefault();e.stopPropagation();action.callback();});
+      b.addEventListener("click",e=>{
+        e.preventDefault();e.stopPropagation();
+        logAction("click","single_"+action.id,"toolbar",[currentUuid()].filter(Boolean));
+        try{const result=action.callback();
+          if(result?.catch)result.catch(err=>logAction("error",
+            "single_"+action.id,String(err.message||err),[currentUuid()].filter(Boolean)));}
+        catch(err){logAction("error","single_"+action.id,
+          String(err.message||err),[currentUuid()].filter(Boolean));}
+      });
       node.appendChild(b);
     }
     const msg=document.createElement("div");
     msg.className="cgs-toast";msg.hidden=true;
     msg.setAttribute("role","status");
     node.appendChild(msg);
+    const legend=document.createElement("div");
+    legend.className="cgs-legend";
+    legend.setAttribute("aria-label","Legenda kolorów i oznaczeń");
+    const colors=[
+      ["#19b77b","Pracuje"],["#e2b438","Wybudzanie"],
+      ["#ef535d","Wymaga reakcji"],["#4e9af1","Kończenie"],
+      ["#37c2bd","Wyjaśnienie"],["#8b95a4","Poza nadzorem"],
+      ["#f7c752","Złota górna linia = ważny"]
+    ];
+    for(const [color,label] of colors){
+      const entry=document.createElement("span");
+      const dot=document.createElement("i");dot.className="cgs-dot";
+      dot.style.backgroundColor=color;
+      entry.append(dot,document.createTextNode(label));legend.append(entry);
+    }
+    node.appendChild(legend);
     document.body.appendChild(node);
     toolbar=node;
     updateToolbar();

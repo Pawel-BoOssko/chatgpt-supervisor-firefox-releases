@@ -126,6 +126,33 @@
         return found.length?found.includes(projectId):null;
       }catch(e){return null;}
     }
+    async function archiveChat(uuid){
+      const id=String(uuid||"").toLowerCase();
+      if(!UUID.test(id))throw new Error("Nieprawidłowy UUID");
+      const auth=await request("/api/auth/session",{
+        credentials:"include",cache:"no-store"});
+      if(!auth.ok)throw new Error("Sesja HTTP "+auth.status);
+      const token=String((await auth.json()).accessToken||"");
+      if(!token)throw new Error("Brak tokenu sesji");
+      const path="/backend-api/conversation/"+encodeURIComponent(id);
+      const headers={Authorization:"Bearer "+token};
+      const read=await request(path,{credentials:"omit",cache:"no-store",headers});
+      if(!read.ok)throw new Error("Odczyt HTTP "+read.status);
+      const current=await read.json();
+      if(current.is_archived===true){
+        remove(id);return {ok:true,already:true,verified:true};
+      }
+      const update=await request(path,{method:"PATCH",credentials:"omit",
+        headers:{...headers,"Content-Type":"application/json"},
+        body:JSON.stringify({is_archived:true})});
+      if(!update.ok)throw new Error("Archiwizacja HTTP "+update.status);
+      const check=await request(path,{credentials:"omit",cache:"no-store",headers});
+      if(!check.ok)throw new Error("Potwierdzenie HTTP "+check.status);
+      const after=await check.json();
+      if(after.is_archived!==true)
+        throw new Error("Serwer nie potwierdził archiwizacji");
+      remove(id);return {ok:true,already:false,verified:true};
+    }
     async function moveToProject(uuid,projectId){
       if(!UUID.test(uuid||"")||!projectCatalog.has(projectId))
         throw new Error("Nieprawidłowy UUID lub projekt spoza listy");
@@ -308,7 +335,7 @@
       return active;
     }
     return {add,remove,search,load,snapshot,entries,projects,projectState,
-      loadProjectList,verifyProject,markMoved,moveToProject};
+      loadProjectList,verifyProject,markMoved,moveToProject,archiveChat};
   }
   root.CGSCreateChatIndex=createChatIndex;
   if(typeof module!=="undefined"&&module.exports)module.exports=createChatIndex;

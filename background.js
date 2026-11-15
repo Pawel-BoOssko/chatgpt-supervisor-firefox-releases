@@ -103,6 +103,19 @@ async function enqueueWakeRequests(uuids){
   }catch(e){return {ok:false,error:String(e.message||e)};}
 }
 
+async function logEvent(message){
+  const event={
+    event:message.event,action:message.action,detail:message.detail,
+    uuids:message.uuids,selected:message.selected,version:message.version
+  };
+  try{
+    return await jsonRequest("/api/event",{
+      method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(event)
+    },5000);
+  }catch(e){return {ok:false,error:String(e.message||e)};}
+}
+
 async function saveFeedback(message){
   const note=String(message||"").trim();
   if(note.length<3||note.length>3000)
@@ -243,6 +256,8 @@ browser.runtime.onMessage.addListener(message=>{
     return openChatTabs(message.uuids);
   if(message && message.type==="SUP_FEEDBACK")
     return saveFeedback(message.message);
+  if(message && message.type==="SUP_LOG_EVENT")
+    return logEvent(message);
   if(message && message.type==="SUP_WAKE_REQUEST")
     return enqueueWakeRequests(message.uuids);
   if(message && message.type==="SUP_LEAVE")
