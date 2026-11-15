@@ -994,6 +994,7 @@
   }
 
   function scan() {
+    if (document.hidden) return;
     for (const a of document.querySelectorAll("a[href*='/c/']")) {
       if (!isSidebarLink(a)) continue;
       const id = uuidForLink(a);
@@ -1033,6 +1034,7 @@
     updateToolbar();
   }
   function queueScan() {
+    if (document.hidden) return;
     if (scanQueued) return;
     scanQueued = true;
     setTimeout(() => {scanQueued=false; scan();}, 120);
@@ -1433,14 +1435,14 @@
     return false;
   }
   function syncNativeMenu(){
-    if(!bulkPanel)return;
+    if(document.hidden||!bulkPanel)return;
     const nativeMenuOpen=popupIntersectsSidecar();
     bulkPanel.classList.toggle("cgs-yield-to-native-menu",nativeMenuOpen);
     if(activeStatusChip && nativeMenuOpen)activeStatusChip.hidden=true;
     if(activeStatusChip && !nativeMenuOpen)updateCurrentChatStatus();
   }
   function scheduleNativeMenuSync(){
-    if(popupSyncTimer!==null)return;
+    if(document.hidden||popupSyncTimer!==null)return;
     popupSyncTimer=setTimeout(()=>{
       popupSyncTimer=null;
       syncNativeMenu();
@@ -1520,6 +1522,7 @@
     updateCurrentChatStatus();
   }
   function tick() {
+    if (document.hidden) return;
     if (location.pathname!==lastPath) {lastPath=location.pathname;queueScan();}
     watchSidebar();
     makeBulkPanel();
@@ -1537,8 +1540,8 @@
   refresh(true);
   refreshProfiles(true);
   setInterval(tick,3000);
-  setInterval(()=>refresh(false),15000);
+  setInterval(()=>{if(!document.hidden)refresh(false);},15000);
   document.addEventListener("visibilitychange",()=>{
-    if(!document.hidden){refresh(true);refreshProfiles(true);observeCurrentChat();if(filtersActive())scheduleIndexLoad();}
+    if(!document.hidden){tick();refresh(true);refreshProfiles(true);observeCurrentChat();if(filtersActive())scheduleIndexLoad();}
   });
 })();
