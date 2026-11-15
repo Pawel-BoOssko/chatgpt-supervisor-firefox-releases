@@ -91,6 +91,31 @@ async function getProfiles(uuids, force = false) {
                          .map(id=>profiles.get(id).item)};
 }
 
+async function enqueueWakeRequests(uuids){
+  if(!Array.isArray(uuids)||uuids.length<1||uuids.length>100||
+     uuids.some(id=>typeof id!=="string"||!UUID.test(id)))
+    return {ok:false,error:"Nieprawidłowa lista UUID (1–100)"};
+  try{
+    return await jsonRequest("/api/wake/request",{
+      method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({uuids:[...new Set(uuids.map(x=>x.toLowerCase()))]})
+    },12000);
+  }catch(e){return {ok:false,error:String(e.message||e)};}
+}
+
+async function saveFeedback(message){
+  const note=String(message||"").trim();
+  if(note.length<3||note.length>3000)
+    return {ok:false,error:"Uwaga musi mieć 3–3000 znaków"};
+  try{
+    return await jsonRequest("/api/feedback",{
+      method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({message:note,
+        version:browser.runtime.getManifest().version})
+    },10000);
+  }catch(e){return {ok:false,error:String(e.message||e)};}
+}
+
 async function leaveNadzor(uuid) {
   if (!UUID.test(uuid||"")) return {ok:false,error:"Nieprawidłowy UUID"};
   try {
@@ -153,7 +178,59 @@ async function openChatTabs(uuids){
   return {ok:failures.length===0,opened,failures};
 }
 
+
+const UPDATE_MANIFEST="https://raw.githubusercontent.com/"+
+  "Pawel-BoOssko/chatgpt-supervisor-firefox-releases/main/updates.json";
+const ADDON_ID="chatgpt-supervisor-status@lupus.local";
+let updateStatusCache=null,updateStatusAt=0,updateStatusInflight=null;
+function compareVersions(a,b){
+  const parts=v=>String(v||"").split(".").map(n=>Number(n));
+  const left=parts(a),right=parts(b);
+  if(left.some(n=>!Number.isInteger(n))||right.some(n=>!Number.isInteger(n)))
+    return null;
+  for(let i=0;i<Math.max(left.length,right.length);i++){
+    const diff=(left[i]||0)-(right[i]||0);
+    if(diff)return Math.sign(diff);
+  }
+  return 0;
+}
+async function getBuildStatus(force=false){
+  const installed=browser.runtime.getManifest().version;
+  const build=globalThis.CGS_BUILD_INFO||{};
+  if(!force && updateStatusCache && Date.now()-updateStatusAt<900000)
+    return updateStatusCache;
+  if(updateStatusInflight)return updateStatusInflight;
+  updateStatusInflight=(async()=>{
+    let result={ok:false,installed,build,latest:null,upToDate:null};
+    try{
+      const controller=new AbortController();
+      const timeout=setTimeout(()=>controller.abort(),7000);
+      let response;
+      try{response=await fetch(UPDATE_MANIFEST,{
+        cache:"no-store",signal:controller.signal
+      });}finally{clearTimeout(timeout);}
+      if(!response.ok)throw new Error("HTTP "+response.status);
+      const data=await response.json();
+      const updates=data?.addons?.[ADDON_ID]?.updates;
+      if(!Array.isArray(updates)||!updates.length)
+        throw new Error("Brak wersji w manifeście aktualizacji");
+      const latest=updates.reduce((best,item)=>
+        compareVersions(item.version,best)>=0?item.version:best,
+        updates[0].version);
+      const comparison=compareVersions(installed,latest);
+      result={ok:comparison!==null,installed,build,latest,
+        upToDate:comparison===null?null:comparison>=0};
+    }catch(e){result.error=String(e.message||e);}
+    updateStatusCache=result;updateStatusAt=Date.now();
+    return result;
+  })();
+  try{return await updateStatusInflight;}
+  finally{updateStatusInflight=null;}
+}
+
 browser.runtime.onMessage.addListener(message=>{
+  if(message && message.type==="SUP_BUILD_STATUS")
+    return getBuildStatus(!!message.force);
   if(message && message.type==="SUP_STATUS_GET")
     return getStatus(!!message.force);
   if(message && message.type==="SUP_PROFILE_GET")
@@ -164,6 +241,10 @@ browser.runtime.onMessage.addListener(message=>{
     return observeBrowser(message);
   if(message && message.type==="SUP_OPEN_TABS")
     return openChatTabs(message.uuids);
+  if(message && message.type==="SUP_FEEDBACK")
+    return saveFeedback(message.message);
+  if(message && message.type==="SUP_WAKE_REQUEST")
+    return enqueueWakeRequests(message.uuids);
   if(message && message.type==="SUP_LEAVE")
     return leaveNadzor(message.uuid);
   return undefined;

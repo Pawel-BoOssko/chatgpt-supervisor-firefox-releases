@@ -18,3 +18,16 @@ async function update(force=false) {
 }
 document.getElementById("refresh").addEventListener("click",()=>update(true));
 update();
+const build=globalThis.CGS_BUILD_INFO||{};
+const buildMeta=document.getElementById("build-meta");
+buildMeta.textContent=(build.name||"ChatGPT Supervisor Status")+" v"+
+  (build.version||"nieznana")+" · "+
+  (build.built_at_local||"brak daty kompilacji");
+browser.runtime.sendMessage({type:"SUP_BUILD_STATUS"}).then(result=>{
+  if(result?.upToDate===false){
+    buildMeta.dataset.update="old";
+    buildMeta.textContent+=" · STARA (najnowsza v"+result.latest+")";
+  }else if(result?.upToDate===true){
+    buildMeta.dataset.update="latest";buildMeta.textContent+=" · aktualna";
+  }
+}).catch(()=>{});

@@ -2,7 +2,7 @@ name: Sign and publish Firefox extension
 on:
   push:
     branches: [main, autosync/SATANAMD-firefox-status]
-    paths: [manifest.json, background.js, content.js, content.css, popup.html, popup.js, .github/workflows/sign-and-publish.yml]
+    paths: [manifest.json, background.js, build-info.js, chat-index.js, ui-model.js, content.js, content.css, popup.html, popup.js, .github/workflows/sign-and-publish.yml]
   workflow_dispatch:
 permissions:
   contents: write
@@ -34,7 +34,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p bundle signed
-          cp source/{manifest.json,background.js,content.js,content.css,popup.html,popup.js} bundle/
+          cp source/{manifest.json,background.js,build-info.js,chat-index.js,ui-model.js,content.js,content.css,popup.html,popup.js} bundle/
           echo "ADDON_VERSION=0.5.$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
           python3 - <<'PY'
           import json,os,pathlib
@@ -44,6 +44,22 @@ jobs:
           assert data["browser_specific_settings"]["gecko"]["update_url"]=="https://raw.githubusercontent.com/"+os.environ["RELEASE_REPO"]+"/main/updates.json"
           data["version"]="0.5."+os.environ["GITHUB_RUN_NUMBER"]
           file.write_text(json.dumps(data,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+          from datetime import datetime,timezone
+          from zoneinfo import ZoneInfo
+          now=datetime.now(timezone.utc)
+          local=now.astimezone(ZoneInfo("Europe/Warsaw"))
+          info={
+            "name":"ChatGPT Supervisor Status",
+            "version":data["version"],
+            "built_at_utc":now.isoformat(timespec="seconds").replace("+00:00","Z"),
+            "built_at_local":local.strftime("%d.%m.%Y g. %H:%M %Z"),
+            "build_kind":"signed-release",
+            "commit":os.environ.get("GITHUB_SHA","unknown")[:12]
+          }
+          pathlib.Path("bundle/build-info.js").write_text(
+            "globalThis.CGS_BUILD_INFO = Object.freeze("+
+            json.dumps(info,ensure_ascii=False,separators=(",",":"))+");\n",
+            encoding="utf-8")
           PY
       - name: Install Mozilla web-ext CLI
         uses: actions/setup-node@v4

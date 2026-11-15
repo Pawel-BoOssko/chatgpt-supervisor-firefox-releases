@@ -196,7 +196,7 @@
           if (p && p.uuid)profiles[p.uuid.toLowerCase()]=p;
         }
         if(data.ok){lastProfileSignature=signature;profileLoadAt=Date.now();}
-        queueScan();
+        filterRenderRevision++;queueScan();
       }
     }catch(e){}finally{profileLoadRunning=false;}
   }
@@ -262,29 +262,203 @@
 
   const bulkSelected=new Set();
   let bulkFilter="",bulkPanel=null,bulkResult=null,bulkBusy=false;
+  const bulkFilters={importance:"all",work:"all",sort:"updated"};
+  let filterRenderRevision=0,projectTarget="";
+  const model=globalThis.CGSFilterModel;
+  const filtersActive=()=>!!bulkFilter.trim()||
+    bulkFilters.importance!=="all"||bulkFilters.work!=="all"||
+    bulkFilters.sort!=="updated";
+  const modelFilters=()=>({term:bulkFilter,...bulkFilters});
+
   const normalized=value=>(value||"").normalize("NFKD").replace(/[\u0300-\u036f]/g,"").toLowerCase();
+
+  let bulkSurface=null,bulkSurfaceBasePadding="0px";
+  let filterResultLimit=100,filterSearchTimer=null;
+  const chatIndex=typeof globalThis.CGSCreateChatIndex==="function"
+    ? globalThis.CGSCreateChatIndex({
+      onUpdate:()=>queueScan(),
+      shouldContinue:()=>!!bulkFilter.trim()&&!document.hidden,
+      loadProfiles:async ids=>{
+        if(!ids.length)return;
+        try{
+          const data=await browser.runtime.sendMessage({
+            type:"SUP_PROFILE_GET",uuids:ids,force:false});
+          if(data?.ok && Array.isArray(data.items))
+            for(const p of data.items)if(p?.uuid)profiles[p.uuid.toLowerCase()]=p;
+        }catch(e){}
+      }
+    }):null;
+  function nativeSidebarRows(){
+    return sidebarRows().filter(a=>!a.closest("#cgs-filter-results"));
+  }
+  function seedNativeIndex(){
+    if(!chatIndex)return;
+    for(const a of nativeSidebarRows()){
+      const id=uuidForLink(a),title=originalTitle(a);
+      if(id&&title)chatIndex.add({uuid:id,title},"native");
+    }
+  }
+  function filteredItems(){
+    const source=chatIndex?[...chatIndex.entries.values()]:
+      nativeSidebarRows().map(a=>({uuid:uuidForLink(a),
+        title:originalTitle(a),updated:0}));
+    if(model)return model.sorted(source,profiles,states,modelFilters());
+    const term=normalized(bulkFilter.trim());
+    return source.filter(item=>normalized(item.title).includes(term)||
+      normalized(profiles[item.uuid]?.imeno||"").includes(term));
+  }
+  function filterResultsContainer(){
+    const scroll=document.querySelector(
+      "#app-shell-sidebar [data-app-action-sidebar-scroll]");
+    if(!scroll)return null;
+    let results=scroll.querySelector("#cgs-filter-results");
+    if(!results){
+      results=document.createElement("div");
+      results.id="cgs-filter-results";
+      results.setAttribute("aria-label","Wyniki filtrowania rozmów");
+      scroll.prepend(results);
+    }
+    return results;
+  }
+  function renderFilterResults(){
+    const container=filterResultsContainer();
+    if(!container)return;
+    if(!filtersActive()){container.hidden=true;container.replaceChildren();return;}
+    container.hidden=false;
+    const matches=filteredItems();
+    const state=chatIndex?.snapshot();
+    const signature=[JSON.stringify(modelFilters()),filterResultLimit,
+      state?.revision||0,filterRenderRevision,
+      [...bulkSelected].sort().join(","),matches.length].join("|");
+    if(container.dataset.cgsSignature===signature)return;
+    container.dataset.cgsSignature=signature;
+    const fragment=document.createDocumentFragment();
+    for(const item of matches.slice(0,filterResultLimit)){
+      const row=document.createElement("div");
+      row.className="cgs-result-row";
+      const status=classify(states[item.uuid]);
+      const important=profiles[item.uuid]?.important===1;
+      row.classList.add("cgs-"+status.color);
+      row.classList.toggle("cgs-important",important);
+      const activity=important?fileAgeColor(states[item.uuid]?.activity||
+        profileFileActivity(profiles[item.uuid])):null;
+      row.style.setProperty("--cgs-left-fill",rgba(STATUS_RGB[status.color]||
+        STATUS_RGB.gray,.28));
+      row.style.setProperty("--cgs-right-fill",activity?.fill||"transparent");
+      row.title=status.label+(important?" | Ważny":"")+
+        (activity?" | "+activity.info:"");
+      row.dataset.cgsResultUuid=item.uuid;
+      const checkbox=document.createElement("input");
+      checkbox.type="checkbox";checkbox.className="cgs-result-check";
+      checkbox.checked=bulkSelected.has(item.uuid);
+      checkbox.setAttribute("aria-label","Zaznacz rozmowę");
+      checkbox.addEventListener("change",()=>{
+        if(checkbox.checked)bulkSelected.add(item.uuid);
+        else bulkSelected.delete(item.uuid);
+        applyBulkFilter();
+      });
+      const link=document.createElement("a");
+      link.href="/c/"+item.uuid;
+      link.textContent=profiles[item.uuid]?.imeno||item.title;
+      link.title=item.title;
+      link.className="cgs-result-link";
+      row.append(checkbox,link);fragment.append(row);
+    }
+    if(matches.length>filterResultLimit){
+      const more=document.createElement("button");
+      more.type="button";more.className="cgs-results-more";
+      more.textContent="Pokaż kolejne ("+(matches.length-filterResultLimit)+")";
+      more.addEventListener("click",()=>{
+        filterResultLimit+=100;
+        renderFilterResults();
+      });
+      fragment.append(more);
+    }
+    if(!matches.length){
+      const empty=document.createElement("div");
+      empty.className="cgs-results-empty";
+      empty.textContent=state?.loading
+        ?"Wyszukiwanie w historii rozmów…"
+        :"Brak dopasowań w załadowanej historii.";
+      fragment.append(empty);
+    }
+    container.replaceChildren(fragment);
+  }
+  function scheduleIndexLoad(force=false){
+    if(!chatIndex)return;
+    clearTimeout(filterSearchTimer);
+    filterSearchTimer=setTimeout(()=>{
+      if(!filtersActive())return;
+      chatIndex.load(force).catch(()=>queueScan());
+    },250);
+  }
+  function positionBulkPanel(sidebar,panel){
+    if(!sidebar||!panel)return;
+    if(getComputedStyle(sidebar).position==="static")
+      sidebar.style.position="relative";
+    const newChat=[...sidebar.querySelectorAll(
+      "button[aria-label='Nowy czat'],button[aria-label='New chat']"
+    )].find(el=>el.getClientRects().length>0);
+    let surface=newChat;
+    while(surface && surface.parentElement!==sidebar)
+      surface=surface.parentElement;
+    if(!surface || surface===panel)
+      surface=sidebar.querySelector(":scope > div:has([data-sidebar-navigation-root])")||
+              sidebar.querySelector(":scope > div")||sidebar;
+    if(bulkSurface!==surface){
+      if(bulkSurface && bulkSurface!==sidebar)
+        bulkSurface.style.removeProperty("padding-top");
+      bulkSurface=surface;
+      bulkSurfaceBasePadding=getComputedStyle(surface).paddingTop||"0px";
+    }
+    const height=Math.ceil(panel.getBoundingClientRect().height||
+      panel.offsetHeight||190)+32;
+    const desired="calc("+bulkSurfaceBasePadding+" + "+height+"px)";
+    if(surface.style.getPropertyValue("padding-top")!==desired)
+      surface.style.setProperty("padding-top",desired,"important");
+  }
   function sidebarRows(){
     return [...document.querySelectorAll("a[href*='/c/']")]
       .filter(a=>isSidebarLink(a)&&uuidForLink(a));
   }
   function applyBulkFilter(){
+    seedNativeIndex();
+    const active=filtersActive();
     const term=normalized(bulkFilter.trim());
+    const sidebar=document.getElementById("app-shell-sidebar")||
+      document.querySelector("aside,[data-testid*='sidebar']");
+    if(sidebar)sidebar.classList.toggle("cgs-search-active",active);
     let shown=0;
-    for(const a of sidebarRows()){
+    for(const a of nativeSidebarRows()){
       const id=uuidForLink(a),name=originalTitle(a),imeno=profiles[id]?.imeno||"";
-      const match=!term||normalized(name).includes(term)||normalized(imeno).includes(term);
+      const match=!active||!model||model.passes({uuid:id,title:name},
+        profiles[id],states[id],modelFilters());
       a.classList.toggle("cgs-filter-hidden",!match);
       if(match)shown++;
       const box=a.querySelector(".cgs-bulk-check");
       if(box)box.checked=bulkSelected.has(id);
     }
+    renderFilterResults();
     if(bulkPanel){
+      const state=chatIndex?.snapshot();
+      const matches=active?filteredItems().length:shown;
+      const summary=active
+        ? matches+" wyników · "+(state?.size||shown)+" w indeksie"+
+          (state?.loading?" · doczytuję…":state?.complete?" · pełny indeks":
+           state?.loaded?" · indeks częściowy":" · lista widoczna")
+        : shown+" widocznych";
       bulkPanel.querySelector(".cgs-bulk-counter").textContent=
-        bulkSelected.size+" zaznaczonych · "+shown+" widocznych";
+        bulkSelected.size+" zaznaczonych · "+summary;
+      const notice=bulkPanel.querySelector(".cgs-index-warning");
+      if(notice){
+        notice.textContent=active && state?.error
+          ?"Niepełny indeks: "+state.error:"";
+        notice.hidden=!notice.textContent;
+      }
     }
   }
   function addBulkCheckbox(a){
-    if(a.querySelector(".cgs-bulk-check"))return;
+    if(a.closest("#cgs-filter-results")||a.querySelector(".cgs-bulk-check"))return;
     const id=uuidForLink(a);
     if(!id)return;
     const checkbox=document.createElement("input");
@@ -345,63 +519,212 @@
     }catch(e){bulkNotice("Otwieranie kart: "+(e.message||e),true);}
     finally{bulkBusy=false;}
   }
+  function findArchiveMenuItem() {
+    return [...document.querySelectorAll(
+      "[role='menu'][data-state='open'] [role='menuitem'],[role='menuitem']"
+    )].filter(visible).find(el=>{
+      const label=(el.innerText||el.textContent||"").trim().toLowerCase();
+      return /^(archiwizuj|archive|archive chat|move to archive)$/.test(label);
+    });
+  }
+  async function waitUntil(predicate,timeoutMs=5000) {
+    const until=Date.now()+timeoutMs;
+    do {
+      if(predicate())return true;
+      await new Promise(resolve=>setTimeout(resolve,100));
+    }while(Date.now()<until);
+    return !!predicate();
+  }
   async function archiveOneSidebar(uuid){
-    const link=sidebarRows().find(a=>uuidForLink(a)===uuid);
-    if(!link)throw new Error("Rozmowa niewidoczna w panelu");
-    let more=null;
-    for(let node=link.parentElement,depth=0;node&&depth<4;node=node.parentElement,depth++){
-      more=[...node.querySelectorAll("button,[role='button']")]
-        .find(b=>/more|options|więcej|opcje|menu|actions/i.test(
-          [b.getAttribute("aria-label"),b.title,b.getAttribute("data-testid")].join(" "))&&
-          b.getClientRects().length>0);
-      if(more)break;
+    const link=sidebarRows().find(a=>uuidForLink(a)===uuid &&
+      !a.closest("#cgs-filter-results"));
+    if(!link)throw new Error("Rozmowa nie jest załadowana w natywnym panelu");
+    const row=link.closest("[data-sidebar-archive-chatgpt-id][role='group']")||
+              link.closest("[role='group']");
+    if(!row)throw new Error("Nie znaleziono wiersza rozmowy");
+    const buttonSelector=[
+      "button[aria-label='Działania na czacie']",
+      "button[aria-label='Chat actions']",
+      "button[aria-haspopup='menu']"
+    ].join(",");
+    let more=row.querySelector(buttonSelector);
+    if(!more){
+      row.dispatchEvent(new MouseEvent("mouseover",{bubbles:true,view:window}));
+      await new Promise(resolve=>setTimeout(resolve,250));
+      more=row.querySelector(buttonSelector);
     }
-    if(more)more.click();
-    else link.dispatchEvent(new MouseEvent("contextmenu",{
-      bubbles:true,cancelable:true,button:2,buttons:2,view:window}));
-    await new Promise(r=>setTimeout(r,450));
-    const menu=[...document.querySelectorAll("[role='menuitem']")]
-      .filter(e=>e.getClientRects().length>0).find(e=>{
-        const text=(e.textContent||"").trim().toLowerCase();
-        return text==="archiwizuj"||text==="archive"||text==="archive chat";
-      });
-    if(!menu)throw new Error("Nie znaleziono opcji archiwizacji");
-    menu.click();
-    await new Promise(r=>setTimeout(r,400));
+    if(!more)throw new Error("Nie znaleziono menu Działania na czacie");
+    more.click();
+    if(!await waitUntil(()=>!!findArchiveMenuItem(),2500))
+      throw new Error("Nie znaleziono opcji Archiwizuj w menu rozmowy");
+    const item=findArchiveMenuItem();
+    item.click();
+    // Do not report success merely because the menu item was clicked.
+    const disappeared=await waitUntil(()=>
+      ![...document.querySelectorAll("[data-sidebar-archive-chatgpt-id][role='group']")]
+        .some(el=>el===row || el.getAttribute("data-sidebar-archive-chatgpt-id")===uuid),
+      8000);
+    if(!disappeared)
+      throw new Error("Nie potwierdzono usunięcia rozmowy z listy po archiwizacji");
   }
   async function bulkArchive(){
     const ids=[...bulkSelected];
     if(!ids.length||bulkBusy)return;
     if(!window.confirm("Archiwizować "+ids.length+" rozmów w ChatGPT?"))return;
     bulkBusy=true;
-    let invoked=0,errors=[];
+    let archived=0,errors=[];
     try{
       for(let i=0;i<ids.length;i++){
         const uuid=ids[i];
-        try{await archiveOneSidebar(uuid);invoked++;bulkSelected.delete(uuid);}
+        try{await archiveOneSidebar(uuid);archived++;bulkSelected.delete(uuid);chatIndex?.remove(uuid);}
         catch(e){errors.push(uuid+": "+(e.message||e));}
         bulkNotice("Archiwizacja "+(i+1)+"/"+ids.length+
-          "; wywołano "+invoked+"; błędy "+errors.length);
+          "; potwierdzono "+archived+"; błędy "+errors.length);
       }
       applyBulkFilter();
-      bulkNotice("Wywołano archiwizację "+invoked+"/"+ids.length+
-        ". Weryfikacja serwera ChatGPT nie jest dostępna."+
+      bulkNotice("Zarchiwizowano i usunięto z panelu "+archived+"/"+ids.length+"."+
         (errors.length?" "+errors.slice(0,2).join("; "):""),errors.length>0);
     }finally{bulkBusy=false;}
   }
+  async function bulkWake(){
+    const ids=[...bulkSelected];
+    if(!ids.length||bulkBusy)return;
+    if(!window.confirm("Dodać "+ids.length+
+      " rozmów do kolejki zgłoszeń wybudzania w Pozór Nadzór?"))return;
+    bulkBusy=true;
+    let created=0,existing=0,errors=[];
+    try{
+      for(let i=0;i<ids.length;i+=100){
+        const batch=ids.slice(i,i+100);
+        const response=await browser.runtime.sendMessage({
+          type:"SUP_WAKE_REQUEST",uuids:batch});
+        if(!response?.ok){
+          errors.push(response?.error||"Błąd zapisu kolejki");continue;
+        }
+        created+=response.queued||0;existing+=response.already||0;
+      }
+      bulkNotice("Zgłoszenia wybudzania: "+created+" nowych, "+existing+
+        " już zapisanych. Oczekują na obsługę przez Nadzór."+
+        (errors.length?" Błędy: "+errors.join("; "):""),errors.length>0);
+    }catch(e){bulkNotice("Wybudzanie: "+(e.message||e),true);}
+    finally{bulkBusy=false;}
+  }
+  async function bulkMoveToProject(){
+    const ids=[...bulkSelected],projectId=projectTarget;
+    if(!ids.length||bulkBusy)return;
+    const project=chatIndex?.projects().find(x=>x.id===projectId);
+    if(!project){bulkNotice("Wybierz prawidłowy projekt.",true);return;}
+    if(!window.confirm("Przenieść "+ids.length+" rozmów do projektu „"+
+      project.name+"”?"))return;
+    bulkBusy=true;
+    let moved=0,errors=[];
+    try{
+      for(let i=0;i<ids.length;i++){
+        const id=ids[i];
+        try{
+          await chatIndex.moveToProject(id,projectId);
+          moved++;bulkSelected.delete(id);
+        }catch(e){
+          errors.push(id+": "+(e.message||e));
+          if(/HTTP 429|HTTP 401|HTTP 403/.test(String(e.message||e)))break;
+        }
+        bulkNotice("Przenoszenie "+(i+1)+"/"+ids.length+
+          " · potwierdzono "+moved+" · błędy "+errors.length);
+        await new Promise(resolve=>setTimeout(resolve,350));
+      }
+      applyBulkFilter();
+      bulkNotice("Przeniesiono i zweryfikowano "+moved+"/"+ids.length+
+        " do „"+project.name+"”."+
+        (errors.length?" "+errors.slice(0,2).join("; "):""),errors.length>0);
+    }finally{bulkBusy=false;}
+  }
+  async function enqueueOneWake(){
+    const uuid=currentUuid();
+    if(!uuid||busy)return;
+    busy=true;updateToolbar();
+    try{
+      const result=await browser.runtime.sendMessage({
+        type:"SUP_WAKE_REQUEST",uuids:[uuid]});
+      if(!result?.ok)throw new Error(result?.error||"Błąd zgłoszenia");
+      toast(result.queued
+        ?"Zgłoszono do kolejki wybudzania; oczekuje na Nadzór."
+        :"Zgłoszenie już istnieje w kolejce Nadzoru.",false);
+    }catch(e){toast("Wybudzanie: "+(e.message||e),true);}
+    finally{busy=false;updateToolbar();}
+  }
   function makeBulkPanel(){
-    if(bulkPanel?.isConnected)return;
     const sidebar=document.getElementById("app-shell-sidebar")||
       document.querySelector("aside,[data-testid*='sidebar']");
     if(!sidebar)return;
+    if(bulkPanel?.isConnected){positionBulkPanel(sidebar,bulkPanel);return;}
     const panel=document.createElement("section");
     panel.id="cgs-bulk-panel";
     panel.setAttribute("aria-label","Filtr i operacje zbiorcze rozmów");
+
+    const build=globalThis.CGS_BUILD_INFO||{};
+    const buildLine=document.createElement("div");
+    buildLine.className="cgs-build-label";
+    buildLine.textContent=(build.name||"ChatGPT Supervisor Status")+
+      " v"+(build.version||"nieznana")+" · "+
+      (build.built_at_local||"brak daty kompilacji");
+    buildLine.title="Kompilacja: "+(build.built_at_utc||"brak")+
+      " | źródło: "+(build.build_kind||"nieznane");
+    panel.append(buildLine);
+    browser.runtime.sendMessage({type:"SUP_BUILD_STATUS"}).then(result=>{
+      if(!buildLine.isConnected)return;
+      if(result?.upToDate===false){
+        buildLine.dataset.update="old";
+        buildLine.textContent+=" · STARA (najnowsza v"+result.latest+")";
+      }else if(result?.upToDate===true){
+        buildLine.dataset.update="latest";
+        buildLine.textContent+=" · aktualna";
+      }else{
+        buildLine.dataset.update="unknown";
+        buildLine.title+=" | aktualność niezweryfikowana";
+      }
+    }).catch(()=>{buildLine.dataset.update="unknown";});
+
     const search=document.createElement("input");
     search.type="search";search.placeholder="Filtr: tytuł lub imeno…";
     search.className="cgs-bulk-search";search.value=bulkFilter;
-    search.addEventListener("input",()=>{bulkFilter=search.value;applyBulkFilter();});
+    search.addEventListener("input",()=>{
+      bulkFilter=search.value;filterResultLimit=100;
+      applyBulkFilter();scheduleIndexLoad();
+    });
     panel.append(search);
+    function filterButtons(label,key,options){
+      const line=document.createElement("div");
+      line.className="cgs-filter-line";
+      const heading=document.createElement("span");
+      heading.className="cgs-filter-heading";
+      heading.textContent=label;line.append(heading);
+      for(const [value,text] of options){
+        const b=document.createElement("button");
+        b.type="button";b.textContent=text;
+        b.className="cgs-filter-choice";
+        b.dataset.filterKey=key;b.dataset.filterValue=value;
+        b.setAttribute("aria-pressed",String(bulkFilters[key]===value));
+        b.addEventListener("click",()=>{
+          bulkFilters[key]=value;filterResultLimit=100;
+          for(const peer of line.querySelectorAll(".cgs-filter-choice"))
+            peer.setAttribute("aria-pressed",
+              String(peer.dataset.filterValue===value));
+          applyBulkFilter();scheduleIndexLoad();
+        });
+        line.append(b);
+      }
+      panel.append(line);
+    }
+    filterButtons("Ważność","importance",[
+      ["all","Wszystkie"],["important","★ Ważne"],
+      ["unimportant","☆ Nieważne"],["unset","? Nieustalone"]]);
+    filterButtons("Praca","work",[
+      ["all","Wszystkie"],["working","Pracują"],
+      ["waking","Wybudzane"],["notworking","Niepracujące"],
+      ["attention","Wymagają reakcji"],["outside","Poza Nadzorem"]]);
+    filterButtons("Ostatnia praca","sort",[
+      ["updated","Domyślnie"],["work-desc","↓ Malejąco"],
+      ["work-asc","↑ Rosnąco"]]);
     const counter=document.createElement("div");
     counter.className="cgs-bulk-counter";panel.append(counter);
     const actions=document.createElement("div");actions.className="cgs-bulk-buttons";
@@ -410,13 +733,15 @@
       b.addEventListener("click",fn);actions.append(b);
     }
     button("Zaznacz widoczne",()=>{
-      for(const a of sidebarRows())if(!a.classList.contains("cgs-filter-hidden"))
-        bulkSelected.add(uuidForLink(a));
+      const ids=filtersActive()?filteredItems().map(item=>item.uuid):
+        nativeSidebarRows().filter(a=>!a.classList.contains("cgs-filter-hidden")).map(uuidForLink);
+      for(const id of ids)bulkSelected.add(id);
       applyBulkFilter();
     });
     button("Odznacz widoczne",()=>{
-      for(const a of sidebarRows())if(!a.classList.contains("cgs-filter-hidden"))
-        bulkSelected.delete(uuidForLink(a));
+      const ids=filtersActive()?filteredItems().map(item=>item.uuid):
+        nativeSidebarRows().filter(a=>!a.classList.contains("cgs-filter-hidden")).map(uuidForLink);
+      for(const id of ids)bulkSelected.delete(id);
       applyBulkFilter();
     });
     button("Wyczyść wybór",()=>{bulkSelected.clear();applyBulkFilter();});
@@ -424,11 +749,79 @@
     button("☆ Nieważne",()=>bulkImportant(0));
     button("Otwórz karty",bulkOpenTabs);
     button("Archiwizuj",bulkArchive);
+    button("↻ Dodaj do wybudzania",bulkWake);
+    button("Odśwież listę",()=>scheduleIndexLoad(true));
     panel.append(actions);
+    const projectRow=document.createElement("div");
+    projectRow.className="cgs-project-row";
+    const projectSelect=document.createElement("select");
+    projectSelect.className="cgs-project-select";
+    projectSelect.setAttribute("aria-label","Projekt docelowy");
+    const projectButton=document.createElement("button");
+    projectButton.type="button";projectButton.textContent="Przenieś do projektu";
+    projectButton.addEventListener("click",bulkMoveToProject);
+    projectRow.append(projectSelect,projectButton);panel.append(projectRow);
+    function updateProjectOptions(){
+      const current=projectSelect.value||projectTarget;
+      const projects=chatIndex?.projects()||[];
+      const options=[new Option(projects.length?"Wybierz projekt…":
+        "Brak projektów (odśwież)","")];
+      for(const project of projects)options.push(new Option(project.name,project.id));
+      projectSelect.replaceChildren(...options);
+      projectSelect.value=projects.some(x=>x.id===current)?current:"";
+      projectTarget=projectSelect.value;
+      projectButton.disabled=!projectTarget;
+    }
+    projectSelect.addEventListener("change",()=>{
+      projectTarget=projectSelect.value;projectButton.disabled=!projectTarget;
+    });
+    projectSelect.addEventListener("focus",()=>{
+      chatIndex?.loadProjectList().then(updateProjectOptions);
+    });
+    updateProjectOptions();
+    chatIndex?.loadProjectList().then(updateProjectOptions);
     bulkResult=document.createElement("div");
     bulkResult.className="cgs-bulk-result";
     bulkResult.setAttribute("aria-live","polite");panel.append(bulkResult);
+    const warning=document.createElement("div");warning.className="cgs-index-warning";
+    warning.hidden=true;panel.append(warning);
+    const feedback=document.createElement("details");
+    feedback.className="cgs-feedback";
+    const feedbackTitle=document.createElement("summary");
+    feedbackTitle.textContent="Zgłoś uwagę lub błąd";
+    const feedbackInput=document.createElement("textarea");
+    feedbackInput.placeholder="Opisz problem lub propozycję zmiany…";
+    feedbackInput.maxLength=3000;
+    feedbackInput.setAttribute("aria-label","Treść uwagi");
+    const feedbackSend=document.createElement("button");
+    feedbackSend.type="button";feedbackSend.textContent="Zapisz zgłoszenie";
+    const feedbackStatus=document.createElement("div");
+    feedbackStatus.className="cgs-feedback-status";
+    feedbackStatus.setAttribute("role","status");
+    feedbackSend.addEventListener("click",async()=>{
+      const message=feedbackInput.value.trim();
+      if(message.length<3){feedbackStatus.textContent="Wpisz co najmniej 3 znaki.";return;}
+      feedbackSend.disabled=true;
+      try{
+        const response=await browser.runtime.sendMessage({
+          type:"SUP_FEEDBACK",message});
+        if(!response?.ok)throw new Error(response?.error||"Nie zapisano uwagi");
+        feedbackInput.value="";
+        feedbackStatus.dataset.error="0";
+        feedbackStatus.textContent="Zapisano lokalnie: "+response.id+
+          ". Zgłoszenie nie zostało jeszcze wysłane do GitHub.";
+      }catch(e){
+        feedbackStatus.dataset.error="1";
+        feedbackStatus.textContent="Błąd zapisu: "+(e.message||e);
+      }finally{feedbackSend.disabled=false;}
+    });
+    feedback.append(feedbackTitle,feedbackInput,feedbackSend,feedbackStatus);
+    panel.append(feedback);
     bulkPanel=panel;sidebar.prepend(panel);
+    positionBulkPanel(sidebar,panel);
+    if(typeof ResizeObserver!=="undefined")new ResizeObserver(()=>{
+      if(panel.isConnected)positionBulkPanel(sidebar,panel);
+    }).observe(panel);
     applyBulkFilter();
   }
 
@@ -489,6 +882,7 @@
       const data = await browser.runtime.sendMessage({type:"SUP_STATUS_GET",force:!!force});
       if (data && data.states && typeof data.states === "object") {
         states = data.states;
+        filterRenderRevision++;
         connected = data.connected === true;
         generatedAt = data.generated_at || "";
         scan();
@@ -665,6 +1059,7 @@
       {id:"join",text:"+",title:"Zgłoś do Nadzoru: wstaw polecenie do czatu",callback:insertJoinPrompt},
       {id:"leave",text:"−",title:"Wyrejestruj z Nadzoru",callback:unsubscribe},
       {id:"important",text:"☆",title:"Oznacz czat jako ważny",callback:toggleImportance},
+      {id:"wake",text:"↻",title:"Dodaj do wybudzania (zgłoszenie do Pozór Nadzór)",callback:enqueueOneWake},
       {id:"imeno",text:"✎",title:"Ustaw imeno",callback:editImeno},
       {id:"archive",text:"▣",title:"Archiwizuj rozmowę w ChatGPT",callback:archiveViaChatGPT}
     ];
@@ -693,12 +1088,14 @@
     const join=toolbar.querySelector(".cgs-action-join");
     const leave=toolbar.querySelector(".cgs-action-leave");
     const archive=toolbar.querySelector(".cgs-action-archive");
+    const wake=toolbar.querySelector(".cgs-action-wake");
     const star=toolbar.querySelector(".cgs-action-important");
     const edit=toolbar.querySelector(".cgs-action-imeno");
     const profile=profiles[id];
     join.disabled=busy || status.registered;
     leave.disabled=busy || !status.registered || !connected;
     archive.disabled=busy;
+    wake.disabled=busy;
     star.disabled=busy || !profile;
     edit.disabled=busy || !profile;
     const important=profile && profile.important===1;
@@ -729,6 +1126,6 @@
   setInterval(tick,3000);
   setInterval(()=>refresh(false),15000);
   document.addEventListener("visibilitychange",()=>{
-    if(!document.hidden){refresh(true);refreshProfiles(true);observeCurrentChat();}
+    if(!document.hidden){refresh(true);refreshProfiles(true);observeCurrentChat();if(filtersActive())scheduleIndexLoad();}
   });
 })();
