@@ -433,3 +433,6 @@ a .cgs-bulk-check,
 
 /* Only hide after confirmed server-side archive; selection remains in memory. */
 .cgs-archived-row{display:none!important}
+
+/* Detached sidecar: do not push down or occupy the native sidebar. */
+#cgs-bulk-panel{position:fixed!important;z-index:2147481000!important;box-sizing:border-box!important;max-height:calc(100vh - 60px)!important;overflow-y:auto!important;overscroll-behavior:contain!important;scrollbar-width:thin!important}

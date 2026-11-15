@@ -406,30 +406,66 @@
       chatIndex.load(force).catch(()=>queueScan());
     },250);
   }
+  // The Supervisor sidecar is outside the native ChatGPT sidebar.
+  // Reserve its width in the conversation pane instead of pushing the
+  // sidebar contents vertically. Restore any old inline padding on rebuild.
+  let contentShiftTarget=null,contentShiftOriginal=null;
+  function contentPane(sidebar){
+    const right=sidebar.getBoundingClientRect().right;
+    const candidates=[...document.querySelectorAll(
+      "main,[role='main'],#thread,[data-testid='conversation-turns']"
+    )].filter(el=>!sidebar.contains(el)&&!el.contains(sidebar));
+    return candidates.find(el=>{
+      const r=el.getBoundingClientRect();
+      return r.width>350 && r.right>right+150 && r.left>=right-45;
+    })||null;
+  }
   function positionBulkPanel(sidebar,panel){
-    if(!sidebar||!panel)return;
-    if(getComputedStyle(sidebar).position==="static")
-      sidebar.style.position="relative";
-    const newChat=[...sidebar.querySelectorAll(
-      "button[aria-label='Nowy czat'],button[aria-label='New chat']"
-    )].find(el=>el.getClientRects().length>0);
-    let surface=newChat;
-    while(surface && surface.parentElement!==sidebar)
-      surface=surface.parentElement;
-    if(!surface || surface===panel)
-      surface=sidebar.querySelector(":scope > div:has([data-sidebar-navigation-root])")||
-              sidebar.querySelector(":scope > div")||sidebar;
-    if(bulkSurface!==surface){
-      if(bulkSurface && bulkSurface!==sidebar)
-        bulkSurface.style.removeProperty("padding-top");
-      bulkSurface=surface;
-      bulkSurfaceBasePadding=getComputedStyle(surface).paddingTop||"0px";
+    if(!sidebar||!panel||!panel.isConnected)return;
+    const b=sidebar.getBoundingClientRect();
+    const top=Math.max(46,Math.round(b.top)+4);
+    const left=Math.max(4,Math.round(b.right)+8);
+    // Keep the sidecar independent from the native sidebar at any zoom.
+    const available=Math.max(250,window.innerWidth-left-120);
+    const width=Math.min(390,Math.max(280,available));
+    const set=(key,value)=>{
+      if(panel.style.getPropertyValue(key)!==value)
+        panel.style.setProperty(key,value,"important");
+    };
+    set("position","fixed");
+    set("left",left+"px");
+    set("top",top+"px");
+    set("width",width+"px");
+    set("max-height","calc(100vh - "+(top+8)+"px)");
+    set("overflow-y","auto");
+    const pane=contentPane(sidebar);
+    if(contentShiftTarget && contentShiftTarget!==pane){
+      if(contentShiftOriginal){
+        for(const [key,setting] of Object.entries(contentShiftOriginal)){
+          if(setting.value)contentShiftTarget.style.setProperty(
+            key,setting.value,setting.priority);
+          else contentShiftTarget.style.removeProperty(key);
+        }
+      }
+      contentShiftTarget=null;contentShiftOriginal=null;
     }
-    const height=Math.ceil(panel.getBoundingClientRect().height||
-      panel.offsetHeight||190)+32;
-    const desired="calc("+bulkSurfaceBasePadding+" + "+height+"px)";
-    if(surface.style.getPropertyValue("padding-top")!==desired)
-      surface.style.setProperty("padding-top",desired,"important");
+    if(pane){
+      if(contentShiftTarget!==pane){
+        contentShiftTarget=pane;
+        contentShiftOriginal={};
+        for(const key of ["padding-left","box-sizing"]){
+          contentShiftOriginal[key]={
+            value:pane.style.getPropertyValue(key),
+            priority:pane.style.getPropertyPriority(key)};
+        }
+        contentShiftOriginal.computedPadding=getComputedStyle(pane).paddingLeft||"0px";
+      }
+      const addition=width+16;
+      const value="calc("+contentShiftOriginal.computedPadding+" + "+addition+"px)";
+      if(pane.style.getPropertyValue("padding-left")!==value)
+        pane.style.setProperty("padding-left",value,"important");
+      pane.style.setProperty("box-sizing","border-box","important");
+    }
   }
   function sidebarRows(){
     return [...document.querySelectorAll("a[href*='/c/']")]
@@ -604,7 +640,7 @@
       "[role='menu'][data-state='open'] [role='menuitem'],[role='menuitem']"
     )].filter(visible).find(el=>{
       const label=(el.innerText||el.textContent||"").trim().toLowerCase();
-      return /^(archiwizuj|archive|archive chat|move to archive)$/.test(label);
+      return /^(archiwizuj|archive|przenieś do archiwum|move to archive)/.test(label);
     });
   }
   async function waitUntil(predicate,timeoutMs=5000) {
@@ -635,15 +671,18 @@
     }
     if(!more)throw new Error("Nie znaleziono menu Działania na czacie");
     more.click();
+    logAction("start","archive","otwarto menu "+uuid,[uuid]);
     if(!await waitUntil(()=>!!findArchiveMenuItem(),2500))
       throw new Error("Nie znaleziono opcji Archiwizuj w menu rozmowy");
     const item=findArchiveMenuItem();
     item.click();
+    logAction("start","archive","kliknięto Archiwizuj "+uuid,[uuid]);
     // Do not report success merely because the menu item was clicked.
+    // Success means the native ChatGPT list no longer contains the UUID.
+    // Filter CSS or our own hidden classes must NOT count as removal.
     const disappeared=await waitUntil(()=>
-      ![...document.querySelectorAll("[data-sidebar-archive-chatgpt-id][role='group']")]
-        .some(el=>el===row || el.getAttribute("data-sidebar-archive-chatgpt-id")===uuid),
-      8000);
+      !sidebarRows().some(a=>uuidForLink(a)===uuid &&
+        !a.closest("#cgs-filter-results")),9000);
     if(!disappeared)
       throw new Error("Nie potwierdzono usunięcia rozmowy z listy po archiwizacji");
   }
@@ -657,18 +696,17 @@
       for(let i=0;i<ids.length;i++){
         const uuid=ids[i];
         try{
-          if(!chatIndex?.archiveChat)throw new Error("Brak obsługi API archiwizacji");
-          await chatIndex.archiveChat(uuid);
-          markArchivedLocal(uuid);
+          await archiveOneSidebar(uuid);
+          chatIndex?.remove(uuid);
           archived++;
-          logAction("result","archive",uuid+" serwer potwierdził",[uuid]);
+          logAction("result","archive",uuid+" zniknął z listy",[uuid]);
         }
         catch(e){errors.push(uuid+": "+(e.message||e));}
         bulkNotice("Archiwizacja "+(i+1)+"/"+ids.length+
           "; potwierdzono "+archived+"; błędy "+errors.length);
       }
       applyBulkFilter();
-      bulkNotice("Potwierdzono archiwizację na serwerze "+archived+"/"+ids.length+"."+
+      bulkNotice("Zniknęły z listy po archiwizacji "+archived+"/"+ids.length+"."+
         (errors.length?" "+errors.slice(0,2).join("; "):""),errors.length>0);
     }finally{bulkBusy=false;}
   }
@@ -928,11 +966,18 @@
     });
     feedback.append(feedbackTitle,feedbackInput,feedbackSend,feedbackStatus);
     panel.append(feedback);
-    bulkPanel=panel;sidebar.prepend(panel);
+    bulkPanel=panel;document.body.appendChild(panel);
     positionBulkPanel(sidebar,panel);
-    if(typeof ResizeObserver!=="undefined")new ResizeObserver(()=>{
+    if(typeof ResizeObserver!=="undefined"){
+      const resize=new ResizeObserver(()=>{
+        if(panel.isConnected)positionBulkPanel(sidebar,panel);
+      });
+      resize.observe(sidebar);
+      resize.observe(panel);
+    }
+    window.addEventListener("resize",()=>{
       if(panel.isConnected)positionBulkPanel(sidebar,panel);
-    }).observe(panel);
+    },{passive:true});
     applyBulkFilter();
   }
 
@@ -1117,79 +1162,46 @@
   function visible(e) {
     return e && e.getClientRects().length>0 && getComputedStyle(e).visibility!=="hidden";
   }
-  async function archiveViaChatGPT() {
-    const id = currentUuid();
-    if (!id || busy) return;
-    busy = true;
-    updateToolbar();
-    try {
-      if(chatIndex?.archiveChat){
-        await chatIndex.archiveChat(id);
-        markArchivedLocal(id);
-        toast("Archiwizacja potwierdzona przez serwer.",false);
+  async function archiveViaChatGPT(){
+    const id=currentUuid();
+    if(!id||busy)return;
+    busy=true;updateToolbar();
+    try{
+      const inSidebar=nativeSidebarRows().some(a=>uuidForLink(a)===id);
+      if(inSidebar){
+        await archiveOneSidebar(id);
+        chatIndex?.remove(id);
+        toast("Zarchiwizowano: rozmowa zniknęła z listy.",false);
+        logAction("result","single_archive",id+" zniknął z listy",[id]);
         return;
       }
-      // ChatGPT's own conversation-header menu contains "Archiwizuj".
-      // It works even when the conversation sidebar is collapsed.
-      const sidebar = document.getElementById("app-shell-sidebar");
-      const sidebarRight = sidebar ? sidebar.getBoundingClientRect().right : 52;
-      const header = [...document.querySelectorAll("button[aria-haspopup='menu']")].find(b => {
-        if (!visible(b) || b.closest("#cgs-status-actions")) return false;
-        const r = b.getBoundingClientRect();
-        return r.top >= 0 && r.top < 85 &&
-          r.left > sidebarRight + 4 && r.left < Math.min(window.innerWidth - 180, sidebarRight + 700) &&
-          (b.textContent || "").trim().length > 2;
-      });
-      if (header) {
-        header.click();
-        await sleep(500);
-        const archiveItem = [...document.querySelectorAll("[role='menuitem']")].filter(visible).find(x => {
-          const s = (x.innerText || x.textContent || "").trim().toLowerCase();
-          return s.includes("archiwizuj") || s.startsWith("archive");
+      // The user may have collapsed the sidebar. Use the conversation header
+      // menu but never claim that a list item disappeared if it was not loaded.
+      const sidebar=document.getElementById("app-shell-sidebar");
+      const edge=sidebar?.getBoundingClientRect().right||48;
+      const header=[...document.querySelectorAll("button[aria-haspopup='menu']")]
+        .filter(b=>visible(b)&&!b.closest("#cgs-status-actions"))
+        .find(b=>{
+          const r=b.getBoundingClientRect();
+          return r.top>=0&&r.top<120&&r.left>edge+3;
         });
-        if (archiveItem) {
-          archiveItem.click();
-          toast("Wybrano archiwizację w ChatGPT.",false);
-          return;
-        }
-        header.click();
-      }
-      let links = [...document.querySelectorAll("a[href*='/c/']")];
-      let link = links.find(a => isSidebarLink(a) && uuidForLink(a)===id);
-      if (!link) {
-        const toggle = document.querySelector(
-          "button[aria-label*='Pokaż pasek boczny'], button[aria-label*='Open sidebar'], [data-testid='open-sidebar-button']"
-        );
-        if (toggle && visible(toggle)) {
-          toggle.click();
-          await sleep(500);
-          links = [...document.querySelectorAll("a[href*='/c/']")];
-          link = links.find(a => isSidebarLink(a) && uuidForLink(a)===id);
-        }
-      }
-      if (!link) throw new Error("Nie znaleziono rozmowy w natywnym panelu ChatGPT.");
-      let menuOpen = false;
-      let node = link;
-      for (let level=0; level<4 && node && !menuOpen; level++,node=node.parentElement) {
-        const buttons = [...node.querySelectorAll("button,[role='button']")].filter(visible);
-        const more = buttons.find(b => /more|options|więcej|opcje|menu|actions|działania na czacie/i.test(
-          (b.getAttribute("aria-label")||"")+" "+(b.getAttribute("title")||"")+" "+(b.getAttribute("data-testid")||"")+" "+(b.id||"")));
-        if (more) {more.click();menuOpen=true;break;}
-      }
-      if (!menuOpen) {
-        link.dispatchEvent(new MouseEvent("contextmenu",{bubbles:true,cancelable:true,button:2,buttons:2,view:window}));
-      }
-      await sleep(650);
-      const items = [...document.querySelectorAll("[role='menuitem'],[data-radix-menu-content] button")].filter(visible);
-      const target = items.find(x => {
-        const label = (x.innerText||x.textContent||"").trim().toLowerCase();
-        return label.includes("archiwizuj") || label.startsWith("archive") || label.startsWith("move to archive");
-      });
-      if (!target) throw new Error("Nie znaleziono polecenia Archiwizuj w menu ChatGPT.");
-      target.click();
-      toast("Wybrano archiwizację w interfejsie ChatGPT.",false);
-    } catch(e) {toast("Archiwizacja: "+(e.message||e),true);}
-    finally {busy=false;updateToolbar();}
+      if(!header)
+        throw new Error("Rozmowa nie jest widoczna na liście; nie znaleziono menu nagłówka.");
+      header.click();
+      if(!await waitUntil(()=>!!findArchiveMenuItem(),2500))
+        throw new Error("Brak polecenia Archiwizuj w menu nagłówka.");
+      findArchiveMenuItem().click();
+      const gone=await waitUntil(()=>
+        !nativeSidebarRows().some(a=>uuidForLink(a)===id),9000);
+      if(!gone)
+        throw new Error("Rozmowa nie zniknęła z listy po archiwizacji.");
+      chatIndex?.remove(id);
+      toast("Rozmowa nie występuje już na liście.",false);
+      logAction("result","single_archive",id+" nie występuje na liście",[id]);
+    }catch(e){
+      toast("Archiwizacja: "+(e.message||e),true);
+      logAction("error","single_archive",id+" "+(e.message||e),[id]);
+    }finally{busy=false;updateToolbar();}
   }
   function makeToolbar() {
     if (toolbar?.isConnected || !document.body) return;
