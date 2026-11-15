@@ -1124,14 +1124,6 @@
       navObserver.observe(root,{childList:true,subtree:true,characterData:true});
     }
   }
-  let statusRetryTimer=null;
-  function scheduleStatusRetry(){
-    if(statusRetryTimer!==null||document.hidden)return;
-    statusRetryTimer=setTimeout(()=>{
-      statusRetryTimer=null;
-      refresh(true);
-    },5000);
-  }
   async function refresh(force) {
     if (loadRunning) return;
     loadRunning = true;
@@ -1145,17 +1137,12 @@
         statusError = connected?"":String(data.error||"Serwer statusów jest niedostępny");
         generatedAt = data.generated_at || "";
         repaintTrackedRows(bulkFilters.work!=="all"||bulkFilters.sort!=="updated");
-        if(!connected)scheduleStatusRetry();
-        else if(statusRetryTimer!==null){
-          clearTimeout(statusRetryTimer);statusRetryTimer=null;
-        }
       }
     } catch(e) {
       connected=false;
       statusLoaded=true;
       statusError=String(e.message||e);
       updateCurrentChatStatus();
-      scheduleStatusRetry();
     }
     finally {loadRunning = false;}
   }
@@ -1593,7 +1580,7 @@
     if(location.pathname!==lastPath){
       lastPath=location.pathname;
       queueScan();
-      refreshProfiles(true);
+      refreshProfiles(false);
       observeCurrentChat();
     }else{
       queueScan();
@@ -1626,9 +1613,7 @@
     if(event.target.closest?.("a[href*='/c/'],a[href='/']"))
       scheduleNavigationCheck();
   },true);
-  // Only server data is polled; no periodic DOM scans.
-  setInterval(()=>{if(!document.hidden)refresh(false);},15000);
-  setInterval(()=>{if(!document.hidden)refreshProfiles(false);},60000);
+  // No periodic data polling. Refresh on real user/navigation/visibility events only.
   document.addEventListener("visibilitychange",()=>{
     if(!document.hidden){
       initializeVisibleUI();
