@@ -23,6 +23,8 @@
   ].join(" ");
   let states = Object.create(null);
   let connected = false;
+  let statusLoaded = false;
+  let statusError = "";
   let generatedAt = "";
   let toolbar = null;
   let busy = false;
@@ -1055,6 +1057,14 @@
       navObserver.observe(root,{childList:true,subtree:true});
     }
   }
+  let statusRetryTimer=null;
+  function scheduleStatusRetry(){
+    if(statusRetryTimer!==null||document.hidden)return;
+    statusRetryTimer=setTimeout(()=>{
+      statusRetryTimer=null;
+      refresh(true);
+    },5000);
+  }
   async function refresh(force) {
     if (loadRunning) return;
     loadRunning = true;
@@ -1064,10 +1074,22 @@
         states = data.states;
         filterRenderRevision++;
         connected = data.connected === true;
+        statusLoaded = true;
+        statusError = connected?"":String(data.error||"Serwer statusów jest niedostępny");
         generatedAt = data.generated_at || "";
         scan();
+        if(!connected)scheduleStatusRetry();
+        else if(statusRetryTimer!==null){
+          clearTimeout(statusRetryTimer);statusRetryTimer=null;
+        }
       }
-    } catch(e) {connected = false;}
+    } catch(e) {
+      connected=false;
+      statusLoaded=true;
+      statusError=String(e.message||e);
+      updateCurrentChatStatus();
+      scheduleStatusRetry();
+    }
     finally {loadRunning = false;}
   }
   function toast(message, error) {
@@ -1338,15 +1360,20 @@
     }
     const status=classify(states[id]);
     const important=profiles[id]?.important===1;
-    const visibleStatus=!states[id]?"Poza Nadzorem":
+    const visibleStatus=!statusLoaded?"Odczyt statusu…":
+      !connected?"Brak połączenia":
+      !states[id]?"Poza Nadzorem":
       statusNames[status.color]||"Nieznany status";
     const caption="Nadzór: "+visibleStatus+(important?" ★":"");
     const label=activeStatusChip.querySelector(".cgs-current-status-label");
     if(label.textContent!==caption)label.textContent=caption;
-    activeStatusChip.dataset.color=status.color;
+    activeStatusChip.dataset.color=!statusLoaded?"gray":
+      !connected?"yellow":status.color;
     const activity=fileAgeColor(states[id]?.activity||
       profileFileActivity(profiles[id]));
-    const tip=status.label+(important?" | Ważny":"")+
+    const stateInfo=!statusLoaded?"Trwa pobieranie statusów Nadzoru":
+      !connected?"Nadzór niedostępny: "+statusError:status.label;
+    const tip=stateInfo+(important?" | Ważny":"")+
       " | "+activity.info+" | UUID: "+id;
     if(activeStatusChip.title!==tip)activeStatusChip.title=tip;
     const b=anchor.getBoundingClientRect();

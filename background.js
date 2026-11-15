@@ -26,19 +26,31 @@ async function jsonRequest(path, options = {}, timeoutMs = 8000) {
   }
 }
 
+async function rememberStatusError(error){
+  const event={at:new Date().toISOString(),error:String(error||"unknown").slice(0,320)};
+  console.warn("ChatGPT Supervisor Status: błąd odczytu Nadzoru",event.error);
+  try{
+    const data=await browser.storage.local.get("cgs_status_errors");
+    const old=Array.isArray(data.cgs_status_errors)?data.cgs_status_errors:[];
+    await browser.storage.local.set({
+      cgs_status_errors:[...old.slice(-39),event]
+    });
+  }catch(_){}
+}
 async function getStatus(force = false) {
   if (!force && statusCache && Date.now() - statusFetchedAt < 10000)
     return statusCache;
   if (statusInflight) return statusInflight;
   statusInflight = (async () => {
     try {
-      const data = await jsonRequest("/api/status", {}, 6000);
+      const data = await jsonRequest("/api/status", {}, 12000);
       if (!data.states || typeof data.states !== "object")
         throw new Error("Niepoprawna odpowiedź Nadzoru");
       statusCache = {...data, connected: true};
       statusFetchedAt = Date.now();
       return statusCache;
     } catch (e) {
+      await rememberStatusError(e.message||e);
       if (statusCache) return {...statusCache, connected: false,
                               error: String(e.message || e)};
       return {ok: false, connected: false, states: {},
