@@ -481,3 +481,72 @@ body [data-radix-popper-content-wrapper],
 body [data-radix-menu-content]{
   z-index:2147483000!important;
 }
+
+/* 2026-11-15: Restore meaningful colors. The old terminal rule background-image:none
+   hid every activity gradient despite successful API responses. */
+a.cgs-status-link{
+  background-image:linear-gradient(90deg,
+    var(--cgs-left-fill,transparent) 0%,
+    var(--cgs-left-fill,transparent) 46%,
+    var(--cgs-right-fill,transparent) 54%,
+    var(--cgs-right-fill,transparent) 100%)!important;
+  background-repeat:no-repeat!important;
+}
+a.cgs-status-link.cgs-important{
+  box-shadow:inset 4px 0 0 var(--cgs-color,#8b95a4),
+             inset 0 2px 0 #f7c752!important;
+}
+/* Action controls are part of the sidecar; never float over message text. */
+#cgs-bulk-panel #cgs-status-actions{
+  position:relative!important;
+  inset:auto!important;
+  display:flex!important;
+  width:100%!important;max-width:100%!important;
+  flex-wrap:wrap!important;
+  justify-content:flex-start!important;
+  margin:5px 0 9px!important;
+  padding:7px!important;
+  gap:5px!important;
+  border-radius:10px!important;
+  box-shadow:none!important;
+  z-index:auto!important;
+}
+#cgs-bulk-panel #cgs-status-actions button.cgs-action{
+  width:34px!important;height:34px!important;
+  min-width:34px!important;min-height:34px!important;
+  max-width:34px!important;max-height:34px!important;
+  flex:0 0 34px!important;font-size:18px!important;
+}
+#cgs-bulk-panel #cgs-status-actions .cgs-legend{
+  width:100%!important;font-size:10px!important;
+  line-height:1.35!important;
+}
+#cgs-bulk-panel .cgs-data-health{
+  display:flex!important;
+  align-items:center!important;
+  gap:6px!important;
+  margin:4px 0 7px!important;
+  padding:6px 8px!important;
+  border:1px solid rgba(140,150,162,.35)!important;
+  border-radius:7px!important;
+  background:rgba(140,150,162,.07)!important;
+  color:var(--text-primary,#ddd)!important;
+  font:11px/1.35 system-ui,sans-serif!important;
+}
+#cgs-bulk-panel .cgs-data-health[data-connected="no"]{
+  border-color:#ed5559!important;
+}
+#cgs-bulk-panel .cgs-data-health-value{
+  flex:1!important;min-width:0!important;
+  white-space:normal!important;overflow-wrap:anywhere!important;
+}
+#cgs-bulk-panel button.cgs-data-refresh{
+  flex:0 0 auto!important;
+  padding:5px 7px!important;margin:0!important;
+  border:1px solid rgba(140,150,162,.5)!important;
+  border-radius:5px!important;
+  color:var(--text-primary,#ddd)!important;
+  background:var(--main-surface-secondary,#333)!important;
+  font:11px system-ui,sans-serif!important;
+  cursor:pointer!important;
+}

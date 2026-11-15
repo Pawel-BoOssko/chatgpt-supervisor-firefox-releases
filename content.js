@@ -26,6 +26,8 @@
   let statusLoaded = false;
   let statusError = "";
   let generatedAt = "";
+  let profilesConnected = false;
+  let profilesError = "";
   let toolbar = null;
   let busy = false;
   let lastPath = location.pathname;
@@ -39,6 +41,7 @@
   let profileLoadRunning=false;
   let profileLoadAt=0;
   let lastProfileSignature="";
+  let lastProfileAttemptSignature="";
   let observationLastAt=0;
   let observationLastSuccess="";
   let observationLastTryAt=0;
@@ -186,21 +189,36 @@
     const ids=currentVisibleIds();
     if(!ids.length)return;
     const signature=ids.join(",");
-    if (!force && signature===lastProfileSignature &&
-        Date.now()-profileLoadAt<24000)return;
+    // Only new sidebar IDs, explicit actions or tab activation request profiles.
+    if(!force && signature===lastProfileAttemptSignature)return;
+    lastProfileAttemptSignature=signature;
     profileLoadRunning=true;
     try {
       const data=await browser.runtime.sendMessage({
         type:"SUP_PROFILE_GET",uuids:ids,force:!!force});
       if (data && Array.isArray(data.items)) {
+        profilesConnected=data.ok===true;
+        profilesError=profilesConnected?"":String(data.error||"Błąd odczytu profili Imeno");
         for(const p of data.items){
           if (p && p.uuid)profiles[p.uuid.toLowerCase()]=p;
         }
         if(data.ok){lastProfileSignature=signature;profileLoadAt=Date.now();}
         filterRenderRevision++;
         repaintTrackedRows(true);
+      }else{
+        profilesConnected=false;
+        profilesError="Niepoprawna odpowiedź serwera profili";
       }
-    }catch(e){}finally{profileLoadRunning=false;}
+    }catch(e){
+      profilesConnected=false;
+      profilesError=String(e.message||e);
+    }finally{
+      profileLoadRunning=false;
+      updateDataHealth();
+      // React may have mounted new sidebar links while the previous request ran.
+      if(!document.hidden&&currentVisibleIds().join(",")!==lastProfileAttemptSignature)
+        void refreshProfiles(false);
+    }
   }
   function ownMcpNickFromAssistant() {
     const assistantMessages=[...document.querySelectorAll(
@@ -812,6 +830,25 @@
     buildLine.title="Kompilacja: "+(build.built_at_utc||"brak")+
       " | źródło: "+(build.build_kind||"nieznane");
     panel.append(buildLine);
+    const health=document.createElement("div");
+    health.className="cgs-data-health";
+    health.setAttribute("role","status");
+    health.setAttribute("aria-live","polite");
+    const healthValue=document.createElement("span");
+    healthValue.className="cgs-data-health-value";
+    const manualRefresh=document.createElement("button");
+    manualRefresh.type="button";
+    manualRefresh.className="cgs-data-refresh";
+    manualRefresh.textContent="Odśwież";
+    manualRefresh.title="Jednorazowo pobierz aktualne statusy Nadzoru i profile Imeno";
+    manualRefresh.addEventListener("click",()=>{
+      if(document.hidden)return;
+      refresh(true);
+      refreshProfiles(true);
+    });
+    health.append(healthValue,manualRefresh);
+    panel.append(health);
+    updateDataHealth();
     browser.runtime.sendMessage({type:"SUP_BUILD_STATUS"}).then(result=>{
       if(!buildLine.isConnected)return;
       if(result?.upToDate===false){
@@ -983,6 +1020,7 @@
     feedback.append(feedbackTitle,feedbackInput,feedbackSend,feedbackStatus);
     panel.append(feedback);
     bulkPanel=panel;document.body.appendChild(panel);
+    if(toolbar?.isConnected)panel.insertBefore(toolbar,search);
     positionBulkPanel(sidebar,panel);
     if(typeof ResizeObserver!=="undefined"){
       panelResizeObserver=new ResizeObserver(()=>{
@@ -1006,7 +1044,7 @@
     const item=states[id],profile=profiles[id];
     showImeno(a,profile);
     const cls=classify(item);
-    const important=profile && profile.important===1;
+    const important=profile?.important===1;
     const activity=important
       ? fileAgeColor((item && item.activity)||profileFileActivity(profile))
       : {fill:"rgba(128,136,146,0.025)",
@@ -1014,8 +1052,12 @@
     const leftRGB=STATUS_RGB[cls.color]||STATUS_RGB.gray;
     const leftAlpha=cls.color==="gray"?.12:cls.color==="muted"?.16:.38;
     const leftFill=rgba(leftRGB,leftAlpha);
-    const key=cls.color+"|"+leftFill+"|"+activity.fill+"|"+
-      (activity.minute ?? "?")+"|"+(important?1:0)+"|"+(profile?.imeno||"");
+    const key=(item?.status||"BRAK_W_BAZIE")+"|"+cls.color+"|"+leftFill+"|"+
+      activity.fill+"|"+(activity.minute ?? "?")+"|"+
+      (important?1:0)+"|"+(profile?.imeno||"");
+    // Even on an unchanged render key, reconcile the important marker:
+    // toggle(token, undefined) can toggle instead of explicitly removing it.
+    a.classList.toggle("cgs-important",important);
     if(a.dataset.cgsKey===key)return;
     a.classList.remove(...STATUS_CLASSES);
     a.classList.add("cgs-status-link","cgs-"+cls.color);
@@ -1050,6 +1092,8 @@
     }
     applyBulkFilter();
     updateToolbar();
+    // Sidebar links can arrive after initial page load; fetch those profiles once.
+    if(!profileLoadRunning)void refreshProfiles(false);
   }
   function queueScan() {
     if (document.hidden) return;
@@ -1132,6 +1176,20 @@
       navObserver.observe(root,{childList:true,subtree:true,characterData:true});
     }
   }
+  function updateDataHealth(){
+    const value=bulkPanel?.querySelector(".cgs-data-health-value");
+    const root=bulkPanel?.querySelector(".cgs-data-health");
+    if(!value||!root)return;
+    const statusSummary=!statusLoaded?"Nadzór: odczyt..."
+      :connected?"Nadzór: "+Object.keys(states).length+" statusów"
+      :"Nadzór: BŁĄD "+(statusError||"brak połączenia");
+    const profileSummary=profilesConnected
+      ?"Imeno: "+Object.keys(profiles).length+" profili"
+      :profilesError?"Imeno: BŁĄD "+profilesError:"Imeno: brak odczytu";
+    value.textContent=statusSummary+" | "+profileSummary;
+    root.dataset.connected=connected?"yes":statusLoaded?"no":"pending";
+    root.title=value.textContent;
+  }
   async function refresh(force) {
     if (document.hidden||loadRunning) return;
     loadRunning = true;
@@ -1145,6 +1203,10 @@
         statusError = connected?"":String(data.error||"Serwer statusów jest niedostępny");
         generatedAt = data.generated_at || "";
         repaintTrackedRows(bulkFilters.work!=="all"||bulkFilters.sort!=="updated");
+      }else{
+        connected=false;
+        statusLoaded=true;
+        statusError="Brak poprawnej odpowiedzi serwera statusów";
       }
     } catch(e) {
       connected=false;
@@ -1152,7 +1214,10 @@
       statusError=String(e.message||e);
       updateCurrentChatStatus();
     }
-    finally {loadRunning = false;}
+    finally {
+      loadRunning = false;
+      updateDataHealth();
+    }
   }
   function toast(message, error) {
     if (!toolbar) return;
@@ -1351,7 +1416,11 @@
       entry.append(dot,document.createTextNode(label));legend.append(entry);
     }
     node.appendChild(legend);
-    document.body.appendChild(node);
+    if(bulkPanel?.isConnected){
+      const search=bulkPanel.querySelector(".cgs-bulk-search");
+      if(search)bulkPanel.insertBefore(node,search);
+      else bulkPanel.appendChild(node);
+    }else document.body.appendChild(node);
     toolbar=node;
     updateToolbar();
   }
