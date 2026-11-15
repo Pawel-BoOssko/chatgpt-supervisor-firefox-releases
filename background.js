@@ -196,7 +196,10 @@ async function openNewChatTab(sender){
     const tab=await browser.tabs.create(options);
     if(!tab || !Number.isInteger(tab.id))
       throw new Error("Nowa karta nie została potwierdzona");
-    return {ok:true,tabId:tab.id,windowId:tab.windowId};
+    const active=await browser.tabs.query({active:true,windowId:tab.windowId});
+    if(!Array.isArray(active)||!active.some(item=>item.id===tab.id))
+      throw new Error("Nowa karta nie została aktywowana");
+    return {ok:true,tabId:tab.id,windowId:tab.windowId,active:true};
   }catch(e){
     return {ok:false,error:String(e.message||e)};
   }
