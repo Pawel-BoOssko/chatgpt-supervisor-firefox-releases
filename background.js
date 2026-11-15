@@ -103,6 +103,19 @@ async function enqueueWakeRequests(uuids){
   }catch(e){return {ok:false,error:String(e.message||e)};}
 }
 
+async function saveFeedback(message){
+  const note=String(message||"").trim();
+  if(note.length<3||note.length>3000)
+    return {ok:false,error:"Uwaga musi mieć 3–3000 znaków"};
+  try{
+    return await jsonRequest("/api/feedback",{
+      method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({message:note,
+        version:browser.runtime.getManifest().version})
+    },10000);
+  }catch(e){return {ok:false,error:String(e.message||e)};}
+}
+
 async function leaveNadzor(uuid) {
   if (!UUID.test(uuid||"")) return {ok:false,error:"Nieprawidłowy UUID"};
   try {
@@ -228,6 +241,8 @@ browser.runtime.onMessage.addListener(message=>{
     return observeBrowser(message);
   if(message && message.type==="SUP_OPEN_TABS")
     return openChatTabs(message.uuids);
+  if(message && message.type==="SUP_FEEDBACK")
+    return saveFeedback(message.message);
   if(message && message.type==="SUP_WAKE_REQUEST")
     return enqueueWakeRequests(message.uuids);
   if(message && message.type==="SUP_LEAVE")

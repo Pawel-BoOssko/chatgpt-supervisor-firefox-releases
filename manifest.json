@@ -40,6 +40,7 @@
       ],
       "js": [
         "build-info.js",
+        "ui-model.js",
         "chat-index.js",
         "content.js"
       ],

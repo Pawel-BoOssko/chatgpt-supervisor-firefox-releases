@@ -785,6 +785,38 @@
     bulkResult.setAttribute("aria-live","polite");panel.append(bulkResult);
     const warning=document.createElement("div");warning.className="cgs-index-warning";
     warning.hidden=true;panel.append(warning);
+    const feedback=document.createElement("details");
+    feedback.className="cgs-feedback";
+    const feedbackTitle=document.createElement("summary");
+    feedbackTitle.textContent="Zgłoś uwagę lub błąd";
+    const feedbackInput=document.createElement("textarea");
+    feedbackInput.placeholder="Opisz problem lub propozycję zmiany…";
+    feedbackInput.maxLength=3000;
+    feedbackInput.setAttribute("aria-label","Treść uwagi");
+    const feedbackSend=document.createElement("button");
+    feedbackSend.type="button";feedbackSend.textContent="Zapisz zgłoszenie";
+    const feedbackStatus=document.createElement("div");
+    feedbackStatus.className="cgs-feedback-status";
+    feedbackStatus.setAttribute("role","status");
+    feedbackSend.addEventListener("click",async()=>{
+      const message=feedbackInput.value.trim();
+      if(message.length<3){feedbackStatus.textContent="Wpisz co najmniej 3 znaki.";return;}
+      feedbackSend.disabled=true;
+      try{
+        const response=await browser.runtime.sendMessage({
+          type:"SUP_FEEDBACK",message});
+        if(!response?.ok)throw new Error(response?.error||"Nie zapisano uwagi");
+        feedbackInput.value="";
+        feedbackStatus.dataset.error="0";
+        feedbackStatus.textContent="Zapisano lokalnie: "+response.id+
+          ". Zgłoszenie nie zostało jeszcze wysłane do GitHub.";
+      }catch(e){
+        feedbackStatus.dataset.error="1";
+        feedbackStatus.textContent="Błąd zapisu: "+(e.message||e);
+      }finally{feedbackSend.disabled=false;}
+    });
+    feedback.append(feedbackTitle,feedbackInput,feedbackSend,feedbackStatus);
+    panel.append(feedback);
     bulkPanel=panel;sidebar.prepend(panel);
     positionBulkPanel(sidebar,panel);
     if(typeof ResizeObserver!=="undefined")new ResizeObserver(()=>{
