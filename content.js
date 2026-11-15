@@ -173,10 +173,8 @@
     const ids=[],set=new Set();
     const id=currentUuid();
     if (id){ids.push(id);set.add(id);}
-    for(const link of document.querySelectorAll("a[href*='/c/']")){
-      if (!isSidebarLink(link))continue;
-      const uuid=uuidForLink(link);
-      if (!uuid || set.has(uuid))continue;
+    for(const uuid of trackedSidebarLinks.keys()){
+      if(set.has(uuid))continue;
       set.add(uuid);ids.push(uuid);
       if(ids.length>=180)break;
     }
@@ -1106,6 +1104,14 @@
         for(const record of records){
           if(record.target.closest?.("#cgs-filter-results,#cgs-bulk-panel,#cgs-status-actions"))
             continue;
+          if(record.type==="characterData"){
+            const link=record.target.parentElement?.closest("a[href*='/c/']");
+            if(!link||!isSidebarLink(link))continue;
+            const imeno=originalTitles.get(link);
+            if(imeno?.node===record.target && record.target.nodeValue===imeno.applied)
+              continue;
+            queueScan();return;
+          }
           if([...record.addedNodes,...record.removedNodes].some(node=>
             node.nodeType===1 && (node.matches?.("a[href*='/c/']")||
             node.querySelector?.("a[href*='/c/']")||
@@ -1115,7 +1121,7 @@
           }
         }
       });
-      navObserver.observe(root,{childList:true,subtree:true});
+      navObserver.observe(root,{childList:true,subtree:true,characterData:true});
     }
   }
   let statusRetryTimer=null;
