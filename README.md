@@ -37,3 +37,7 @@ Manual initial installation: use a signed XPI from releases/ or via the Firefox 
 - Bulk archive uses the native ChatGPT sidebar menu, with explicit confirmation. It reports attempted menu clicks, not backend-confirmed archival. Unavailable menu options are reported as failures.
 - Source verification: Mozilla web-ext lint 0 errors/0 warnings, JavaScript syntax checks, Neo4j mock tests, and jsdom DOM test for filtering and persistent selection.
 - The signing workflow is triggered on main and autosync branch changes. Without AMO_API_KEY and AMO_API_SECRET GitHub Actions reports success but skips Mozilla signing and XPI publication. A successful workflow alone is not proof of a signed release.
+
+
+<!-- IMENO-POLECENIE-PAWLA-MCP-2026-11-16 -->
+Instrukcja dla programistów dotycząca przyszłej migracji MCP/IMENO: [POLECENIE_PAWLA_IMENO_MCP.md](POLECENIE_PAWLA_IMENO_MCP.md). Dotyczy wyłącznie prac po uzgodnieniu z Pawłem; bez zmian obecnego działania.
