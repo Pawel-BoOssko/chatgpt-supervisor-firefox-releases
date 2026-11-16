@@ -36,6 +36,8 @@
   let scanQueued = false;
   let scanTimer = null;
   let loadRunning = false;
+  // Invalidates asynchronous responses started before a tab became hidden.
+  let visibilityEpoch = 0;
   const profiles=Object.create(null);
   const originalTitles=new WeakMap();
   let profileLoadRunning=false;
@@ -193,9 +195,12 @@
     if(!force && signature===lastProfileAttemptSignature)return;
     lastProfileAttemptSignature=signature;
     profileLoadRunning=true;
+    const requestEpoch=visibilityEpoch;
     try {
       const data=await browser.runtime.sendMessage({
         type:"SUP_PROFILE_GET",uuids:ids,force:!!force});
+      // Never apply late responses in an inactive tab or in a later activation.
+      if(document.hidden||requestEpoch!==visibilityEpoch)return;
       if (data && Array.isArray(data.items)) {
         profilesConnected=data.ok===true;
         profilesError=profilesConnected?"":String(data.error||"Błąd odczytu profili Imeno");
@@ -210,14 +215,23 @@
         profilesError="Niepoprawna odpowiedź serwera profili";
       }
     }catch(e){
-      profilesConnected=false;
-      profilesError=String(e.message||e);
+      if(!document.hidden&&requestEpoch===visibilityEpoch){
+        profilesConnected=false;
+        profilesError=String(e.message||e);
+      }
     }finally{
       profileLoadRunning=false;
-      updateDataHealth();
-      // React may have mounted new sidebar links while the previous request ran.
-      if(!document.hidden&&currentVisibleIds().join(",")!==lastProfileAttemptSignature)
-        void refreshProfiles(false);
+      if(!document.hidden){
+        if(requestEpoch!==visibilityEpoch){
+          // The tab was reactivated while an old request was still pending.
+          void refreshProfiles(true);
+        }else{
+          updateDataHealth();
+          // React may have mounted new sidebar links while the previous request ran.
+          if(currentVisibleIds().join(",")!==lastProfileAttemptSignature)
+            void refreshProfiles(false);
+        }
+      }
     }
   }
   function ownMcpNickFromAssistant() {
@@ -305,7 +319,7 @@
         try{
           const data=await browser.runtime.sendMessage({
             type:"SUP_PROFILE_GET",uuids:ids,force:false});
-          if(data?.ok && Array.isArray(data.items))
+          if(!document.hidden&&data?.ok && Array.isArray(data.items))
             for(const p of data.items)if(p?.uuid)profiles[p.uuid.toLowerCase()]=p;
         }catch(e){}
       }
@@ -1193,8 +1207,10 @@
   async function refresh(force) {
     if (document.hidden||loadRunning) return;
     loadRunning = true;
+    const requestEpoch=visibilityEpoch;
     try {
       const data = await browser.runtime.sendMessage({type:"SUP_STATUS_GET",force:!!force});
+      if(document.hidden||requestEpoch!==visibilityEpoch)return;
       if (data && data.states && typeof data.states === "object") {
         states = data.states;
         filterRenderRevision++;
@@ -1209,14 +1225,19 @@
         statusError="Brak poprawnej odpowiedzi serwera statusów";
       }
     } catch(e) {
-      connected=false;
-      statusLoaded=true;
-      statusError=String(e.message||e);
-      updateCurrentChatStatus();
+      if(!document.hidden&&requestEpoch===visibilityEpoch){
+        connected=false;
+        statusLoaded=true;
+        statusError=String(e.message||e);
+        updateCurrentChatStatus();
+      }
     }
     finally {
       loadRunning = false;
-      updateDataHealth();
+      if(!document.hidden){
+        if(requestEpoch!==visibilityEpoch)void refresh(true);
+        else updateDataHealth();
+      }
     }
   }
   function toast(message, error) {
@@ -1685,6 +1706,7 @@
     scan();
   }
   function suspendInvisibleUI(){
+    visibilityEpoch++;
     if(navObserver){navObserver.disconnect();navObserver=null;}
     navRoot=null;
     if(sidebarMountObserver){sidebarMountObserver.disconnect();sidebarMountObserver=null;}
