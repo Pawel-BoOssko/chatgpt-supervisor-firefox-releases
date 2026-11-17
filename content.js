@@ -1,5 +1,10 @@
 "use strict";
 (() => {
+  // The shared background elects one active tab per Firefox profile.
+  // Isolated legacy unit tests without the micro-client retain the visible-tab model.
+  const cgsTabActive=()=>!document.hidden &&
+    globalThis.CGS_COORDINATOR_ACTIVE!==false;
+
   if (globalThis.__cgsStatusPanelStarted) return;
   globalThis.__cgsStatusPanelStarted = true;
 
@@ -190,7 +195,7 @@
     return ids;
   }
   async function refreshProfiles(force=false) {
-    if (document.hidden||profileLoadRunning)return;
+    if (!cgsTabActive()||profileLoadRunning)return;
     const ids=currentVisibleIds();
     if(!ids.length)return;
     const signature=ids.join(",");
@@ -203,7 +208,7 @@
       const data=await browser.runtime.sendMessage({
         type:"SUP_PROFILE_GET",uuids:ids,force:!!force});
       // Never apply late responses in an inactive tab or in a later activation.
-      if(document.hidden||requestEpoch!==visibilityEpoch)return;
+      if(!cgsTabActive()||requestEpoch!==visibilityEpoch)return;
       if (data && Array.isArray(data.items)) {
         profilesConnected=data.ok===true;
         profilesError=profilesConnected?"":String(data.error||"Błąd odczytu profili Imeno");
@@ -218,13 +223,13 @@
         profilesError="Niepoprawna odpowiedź serwera profili";
       }
     }catch(e){
-      if(!document.hidden&&requestEpoch===visibilityEpoch){
+      if(cgsTabActive()&&requestEpoch===visibilityEpoch){
         profilesConnected=false;
         profilesError=String(e.message||e);
       }
     }finally{
       profileLoadRunning=false;
-      if(!document.hidden){
+      if(cgsTabActive()){
         if(requestEpoch!==visibilityEpoch){
           // The tab was reactivated while an old request was still pending.
           void refreshProfiles(true);
@@ -257,7 +262,7 @@
   }
   async function observeCurrentChat() {
     const uuid=currentUuid();
-    if(!uuid || document.hidden)return;
+    if(!uuid || !cgsTabActive())return;
     const now=Date.now();
     if (now-observationLastTryAt<9000)return;
     observationLastTryAt=now;
@@ -391,14 +396,14 @@
   const chatIndex=typeof globalThis.CGSCreateChatIndex==="function"
     ? globalThis.CGSCreateChatIndex({
       onUpdate:()=>queueScan(),
-      shouldContinue:()=>!!bulkFilter.trim()&&!document.hidden,
-      isActive:()=>!document.hidden,
+      shouldContinue:()=>!!bulkFilter.trim()&&cgsTabActive(),
+      isActive:()=>cgsTabActive(),
       loadProfiles:async ids=>{
-        if(document.hidden||!ids.length)return;
+        if(!cgsTabActive()||!ids.length)return;
         try{
           const data=await browser.runtime.sendMessage({
             type:"SUP_PROFILE_GET",uuids:ids,force:false});
-          if(!document.hidden&&data?.ok && Array.isArray(data.items))
+          if(cgsTabActive()&&data?.ok && Array.isArray(data.items))
             for(const p of data.items)if(p?.uuid)profiles[p.uuid.toLowerCase()]=p;
         }catch(e){}
       }
@@ -521,11 +526,11 @@
     container.replaceChildren(fragment);
   }
   function scheduleIndexLoad(force=false){
-    if(!chatIndex||document.hidden)return;
+    if(!chatIndex||!cgsTabActive())return;
     clearTimeout(filterSearchTimer);
     filterSearchTimer=setTimeout(()=>{
       filterSearchTimer=null;
-      if(document.hidden||!filtersActive())return;
+      if(!cgsTabActive()||!filtersActive())return;
       chatIndex.load(force).catch(()=>queueScan());
     },250);
   }
@@ -935,7 +940,7 @@
     manualRefresh.textContent="Odśwież";
     manualRefresh.title="Jednorazowo pobierz aktualne statusy Nadzoru i profile Imeno";
     manualRefresh.addEventListener("click",()=>{
-      if(document.hidden)return;
+      if(!cgsTabActive())return;
       refresh(true);
       refreshProfiles(true);
     });
@@ -1117,13 +1122,13 @@
     positionBulkPanel(sidebar,panel);
     if(typeof ResizeObserver!=="undefined"){
       panelResizeObserver=new ResizeObserver(()=>{
-        if(!document.hidden&&panel.isConnected)positionBulkPanel(sidebar,panel);
+        if(cgsTabActive()&&panel.isConnected)positionBulkPanel(sidebar,panel);
       });
       panelResizeObserver.observe(sidebar);
       panelResizeObserver.observe(panel);
     }
     window.addEventListener("resize",()=>{
-      if(!document.hidden&&panel.isConnected)positionBulkPanel(sidebar,panel);
+      if(cgsTabActive()&&panel.isConnected)positionBulkPanel(sidebar,panel);
     },{passive:true});
     applyBulkFilter();
   }
@@ -1164,7 +1169,7 @@
       (profile?.imeno?" | imeno: "+profile.imeno:"");
   }
   function repaintTrackedRows(reapplyFilters=false){
-    if(document.hidden)return;
+    if(!cgsTabActive())return;
     for(const [id,a] of trackedSidebarLinks){
       if(!a.isConnected)continue;
       paintTrackedRow(a,id);
@@ -1173,7 +1178,7 @@
     updateToolbar();
   }
   function scan() {
-    if(document.hidden)return;
+    if(!cgsTabActive())return;
     trackedSidebarLinks.clear();
     for(const a of sidebarRows()){
       if(!isSidebarLink(a)||a.closest("#cgs-filter-results"))continue;
@@ -1189,12 +1194,12 @@
     if(!profileLoadRunning)void refreshProfiles(false);
   }
   function queueScan() {
-    if (document.hidden) return;
+    if (!cgsTabActive()) return;
     if (scanQueued) return;
     scanQueued = true;
     scanTimer=setTimeout(() => {
       scanQueued=false;scanTimer=null;
-      if(!document.hidden)scan();
+      if(cgsTabActive())scan();
     }, 120);
   }
   const wheelBound=new WeakSet();
@@ -1216,9 +1221,9 @@
   }
   let sidebarMountObserver=null;
   function waitForSidebarMount(){
-    if(document.hidden||sidebarMountObserver||!document.body)return;
+    if(!cgsTabActive()||sidebarMountObserver||!document.body)return;
     sidebarMountObserver=new MutationObserver(records=>{
-      if(document.hidden)return;
+      if(!cgsTabActive())return;
       const selector="#app-shell-sidebar,aside,[data-testid*='sidebar']";
       if(!records.some(record=>[...record.addedNodes].some(node=>
         node.nodeType===1 && (node.matches?.(selector)||
@@ -1232,7 +1237,7 @@
     sidebarMountObserver.observe(document.body,{childList:true,subtree:true});
   }
   function watchSidebar() {
-    if(document.hidden)return;
+    if(!cgsTabActive())return;
     const root=document.getElementById("app-shell-sidebar")||
       document.querySelector("aside,[data-testid*='sidebar']");
     if(!root){waitForSidebarMount();return;}
@@ -1245,7 +1250,7 @@
     navRoot = root;
     if (root) {
       navObserver = new MutationObserver(records=>{
-        if(document.hidden)return;
+        if(!cgsTabActive())return;
         for(const record of records){
           if(record.target.closest?.("#cgs-filter-results,#cgs-bulk-panel,#cgs-status-actions"))
             continue;
@@ -1284,12 +1289,12 @@
     root.title=value.textContent;
   }
   async function refresh(force) {
-    if (document.hidden||loadRunning) return;
+    if (!cgsTabActive()||loadRunning) return;
     loadRunning = true;
     const requestEpoch=visibilityEpoch;
     try {
       const data = await browser.runtime.sendMessage({type:"SUP_STATUS_GET",force:!!force});
-      if(document.hidden||requestEpoch!==visibilityEpoch)return;
+      if(!cgsTabActive()||requestEpoch!==visibilityEpoch)return;
       if (data && data.states && typeof data.states === "object") {
         states = data.states;
         filterRenderRevision++;
@@ -1304,7 +1309,7 @@
         statusError="Brak poprawnej odpowiedzi serwera statusów";
       }
     } catch(e) {
-      if(!document.hidden&&requestEpoch===visibilityEpoch){
+      if(cgsTabActive()&&requestEpoch===visibilityEpoch){
         connected=false;
         statusLoaded=true;
         statusError=String(e.message||e);
@@ -1313,7 +1318,7 @@
     }
     finally {
       loadRunning = false;
-      if(!document.hidden){
+      if(cgsTabActive()){
         if(requestEpoch!==visibilityEpoch)void refresh(true);
         else updateDataHealth();
       }
@@ -1668,14 +1673,14 @@
     return false;
   }
   function syncNativeMenu(){
-    if(document.hidden||!bulkPanel)return;
+    if(!cgsTabActive()||!bulkPanel)return;
     const nativeMenuOpen=popupIntersectsSidecar();
     bulkPanel.classList.toggle("cgs-yield-to-native-menu",nativeMenuOpen);
     if(activeStatusChip && nativeMenuOpen)activeStatusChip.hidden=true;
     if(activeStatusChip && !nativeMenuOpen)updateCurrentChatStatus();
   }
   function scheduleNativeMenuSync(){
-    if(document.hidden||popupSyncTimer!==null)return;
+    if(!cgsTabActive()||popupSyncTimer!==null)return;
     popupSyncTimer=setTimeout(()=>{
       popupSyncTimer=null;
       syncNativeMenu();
@@ -1683,7 +1688,7 @@
   }
   let nativeMenuObserver=null,nativeMenuListenersAdded=false;
   function watchNativeMenus(){
-    if(document.hidden||!document.body||nativeMenuObserver)return;
+    if(!cgsTabActive()||!document.body||nativeMenuObserver)return;
     if(!nativeMenuListenersAdded){
       nativeMenuListenersAdded=true;
     document.addEventListener("pointerdown",event=>{
@@ -1700,7 +1705,7 @@
     },true);
     }
     nativeMenuObserver=new MutationObserver(records=>{
-      if(document.hidden)return;
+      if(!cgsTabActive())return;
       for(const record of records){
         if(record.type==="attributes"){
           if(record.target.matches?.(POPUP_SELECTOR)){
@@ -1776,7 +1781,7 @@
     updateCurrentChatStatus();
   }
   function onNavigationChange(){
-    if(document.hidden)return;
+    if(!cgsTabActive())return;
     initializeVisibleUI();
     watchSidebar();
     makeBulkPanel();
@@ -1797,7 +1802,7 @@
   }
   let initialized=false;
   function initializeVisibleUI(){
-    if(initialized||document.hidden)return;
+    if(initialized||!cgsTabActive())return;
     initialized=true;
     makeToolbar();
     watchSidebar();
@@ -1808,6 +1813,9 @@
   }
   function suspendInvisibleUI(){
     visibilityEpoch++;
+    // A different tab may have changed Imeno while this one was parked.
+    // The next activation asks the shared background cache once, not Imeno per tab.
+    lastProfileAttemptSignature="";
     if(navObserver){navObserver.disconnect();navObserver=null;}
     navRoot=null;
     if(sidebarMountObserver){sidebarMountObserver.disconnect();sidebarMountObserver=null;}
@@ -1821,7 +1829,7 @@
     trackedSidebarLinks.clear();
   }
   function activateVisibleUI(){
-    if(document.hidden)return;
+    if(!cgsTabActive())return;
     initializeVisibleUI();
     watchSidebar();
     watchNativeMenus();
@@ -1833,13 +1841,19 @@
     }
     onNavigationChange();
     syncNativeMenu();
-    refresh(true);
-    refreshProfiles(true);
+    refresh(false);
+    refreshProfiles(false);
     observeCurrentChat();
     void fetchLifecycle(currentUuid());
-    if(filtersActive())scheduleIndexLoad(true);
+    if(filtersActive())scheduleIndexLoad(false);
   }
-  activateVisibleUI();
+  function syncOwnerActivity(){
+    document.documentElement.classList.toggle("cgs-coordinator-parked",!cgsTabActive());
+    if(cgsTabActive())activateVisibleUI();
+    else suspendInvisibleUI();
+  }
+  syncOwnerActivity();
+  document.addEventListener("cgs:coordinator-active",syncOwnerActivity);
   // React navigation is handled by sidebar mutations and native navigation events.
   window.addEventListener("popstate",onNavigationChange);
   window.addEventListener("hashchange",onNavigationChange);
@@ -1851,7 +1865,8 @@
   },true);
   // No periodic data polling. Refresh on real user/navigation/visibility events only.
   document.addEventListener("visibilitychange",()=>{
-    if(document.hidden)suspendInvisibleUI();
-    else activateVisibleUI();
+    // Reconcile aliases even when Firefox emits a duplicate visible event.
+    if(cgsTabActive())lastProfileAttemptSignature="";
+    syncOwnerActivity();
   });
 })();

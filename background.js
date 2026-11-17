@@ -338,6 +338,12 @@ async function getBuildStatus(force=false){
 }
 
 browser.runtime.onMessage.addListener((message,sender)=>{
+  if(message && message.type==="SUP_COORD_REGISTER")
+    return globalThis.CGS_COORDINATOR?.register(sender)
+      ||Promise.resolve({ok:false,active:false});
+  if(message && message.type==="SUP_COORD_STATUS")
+    return Promise.resolve({ok:true,ownerTabId:globalThis.CGS_COORDINATOR?.getOwner(),
+      epoch:globalThis.CGS_COORDINATOR?.getEpoch()});
   if(message && message.type==="SUP_BUILD_STATUS")
     return getBuildStatus(!!message.force);
   if(message && message.type==="SUP_STATUS_GET")

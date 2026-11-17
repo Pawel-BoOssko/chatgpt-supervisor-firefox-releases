@@ -1,5 +1,10 @@
 "use strict";
 (() => {
+  // The shared background elects one active tab per Firefox profile.
+  // Isolated legacy unit tests without the micro-client retain the visible-tab model.
+  const cgsTabActive=()=>!document.hidden &&
+    globalThis.CGS_COORDINATOR_ACTIVE!==false;
+
   if(globalThis.__cgsImenoRightPanelStarted)return;
   globalThis.__cgsImenoRightPanelStarted=true;
   const UUID_ROUTE=/\/c\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})(?:\/|$)/i;
@@ -266,7 +271,7 @@
     renderTriage(c);
   }
   async function refresh(force=false){
-    if(document.hidden||busy)return;
+    if(!cgsTabActive()||busy)return;
     const uid=uuid();
     if(!uid)return;
     const startEpoch=epoch;
@@ -276,7 +281,7 @@
     setStatus("Odczyt kontekstu z Imeno…");
     try{
       const data=await browser.runtime.sendMessage({type:"SUP_CONTEXT_GET",uuid:uid,force:!!force});
-      if(document.hidden||startEpoch!==epoch||uid!==uuid())return;
+      if(!cgsTabActive()||startEpoch!==epoch||uid!==uuid())return;
       if(!data?.ok){
         context=null;render();
         const reason=String(data?.error||"brak odpowiedzi");
@@ -286,7 +291,7 @@
           initialContextRetryUuid=uid;
           contextRetryTimer=setTimeout(()=>{
             contextRetryTimer=null;
-            if(!document.hidden&&uuid()===uid&&epoch===startEpoch)void refresh(true);
+            if(cgsTabActive()&&uuid()===uid&&epoch===startEpoch)void refresh(true);
           },1300);
         }
         return;
@@ -298,14 +303,14 @@
       render();
       setStatus("Imeno: odczytano kontekst · rewizja "+str(data.lifecycle_revision,"?"));
     }catch(e){
-      if(!document.hidden&&startEpoch===epoch){
+      if(cgsTabActive()&&startEpoch===epoch){
         context=null;render();setStatus("Błąd Imeno: "+(e.message||e),true);
       }
     }
   }
   async function triage(action){
     const uid=uuid();
-    if(document.hidden||busy||!uid||!context)return;
+    if(!cgsTabActive()||busy||!uid||!context)return;
     const folderAction=FOLDER_ACTIONS.has(action);
     const folders=(context.folders||[]).filter(f=>selectedKeys.has(f.key));
     if(folderAction&&!folders.length){
@@ -336,7 +341,7 @@
     };
     try{
       const result=await browser.runtime.sendMessage(payload);
-      if(document.hidden||epoch!==startEpoch||uuid()!==uid)return;
+      if(!cgsTabActive()||epoch!==startEpoch||uuid()!==uid)return;
       if(result?.ok){
         selectedKeys.clear();
         const cleanup=result.nadzor_cleanup?.status;
@@ -354,15 +359,15 @@
           "Nie zapisano: "+str(result?.error,result?.status),true);
       }
     }catch(e){
-      if(!document.hidden&&epoch===startEpoch)
+      if(cgsTabActive()&&epoch===startEpoch)
         setStatus("Zapis nieudany: "+(e.message||e),true);
     }finally{
       busy=false;
-      if(!document.hidden&&epoch===startEpoch&&context)render();
+      if(cgsTabActive()&&epoch===startEpoch&&context)render();
     }
   }
   function checkRoute(force=false){
-    if(document.hidden)return;
+    if(!cgsTabActive())return;
     const id=uuid();
     if(!id){
       if(shell)shell.hidden=true;
@@ -386,14 +391,16 @@
     setTimeout(()=>checkRoute(false),0);
     setTimeout(()=>checkRoute(false),180);
   }
-  document.addEventListener("visibilitychange",()=>{
+  function syncOwnerActivity(){
     epoch++;
     if(contextRetryTimer){clearTimeout(contextRetryTimer);contextRetryTimer=null;}
-    if(document.hidden){
+    if(!cgsTabActive()){
       if(shell)shell.hidden=true;
       document.documentElement.classList.remove("cgs-ir-open");
     }else checkRoute(true);
-  });
+  }
+  document.addEventListener("visibilitychange",syncOwnerActivity);
+  document.addEventListener("cgs:coordinator-active",syncOwnerActivity);
   window.addEventListener("popstate",navigateSoon);
   window.addEventListener("hashchange",navigateSoon);
   window.addEventListener("pageshow",()=>checkRoute(false));

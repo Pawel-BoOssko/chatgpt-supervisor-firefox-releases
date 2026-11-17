@@ -26,6 +26,7 @@
   "background": {
     "scripts": [
       "build-info.js",
+      "coordinator-background.js",
       "background.js"
     ]
   },
@@ -42,6 +43,7 @@
         "build-info.js",
         "ui-model.js",
         "chat-index.js",
+        "coordinator-client.js",
         "content.js",
         "right-panel.js"
       ],

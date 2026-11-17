@@ -199,3 +199,9 @@
   display:inline-block!important;width:9px!important;height:9px!important;
   border-radius:50%!important;margin-right:3px!important;vertical-align:baseline!important;
 }
+
+/* One elected visible ChatGPT tab per entire Firefox profile. */
+html.cgs-coordinator-parked #cgs-imeno-right-shell,
+html.cgs-coordinator-parked #cgs-bulk-panel,
+html.cgs-coordinator-parked #cgs-status-actions,
+html.cgs-coordinator-parked .cgs-status-chip{display:none!important;}
