@@ -10,8 +10,11 @@
     if(!Number.isInteger(n)||n<epoch)return;
     const next=!!enabled && !document.hidden;
     if(n===epoch && next===active)return;
+    const changed=next!==active;
     epoch=n;active=next;
     globalThis.CGS_COORDINATOR_ACTIVE=active;
+    // New epoch with the same ownership is not a real activation.
+    if(!changed)return;
     document.dispatchEvent(new CustomEvent("cgs:coordinator-active",{
       detail:{active,epoch}
     }));
@@ -33,6 +36,9 @@
     if(document.hidden)apply(false,Math.max(0,epoch));
     else register();
   });
-  window.addEventListener("pageshow",register);
+  // Initial registration already runs below. Only BFCache restores need pageshow.
+  window.addEventListener("pageshow",event=>{
+    if(event.persisted)register();
+  });
   register();
 })();

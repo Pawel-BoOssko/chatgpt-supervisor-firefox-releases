@@ -38,6 +38,9 @@
   let lastPath = location.pathname;
   const lifecycleByUuid=Object.create(null);
   let lifecycleRequestedUuid="";
+  const lifecycleLastFetchedAt=Object.create(null);
+  const lifecycleInflight=new Map();
+  const LIFECYCLE_FRESH_MS=25000;
 
   let navObserver = null;
   let navRoot = null;
@@ -297,21 +300,32 @@
     const m = UUID_LINK.exec(location.pathname);
     return m ? m[1].toLowerCase() : null;
   }
-  async function fetchLifecycle(uuid, {refreshUI=true}={}) {
+  async function fetchLifecycle(uuid, {refreshUI=true,force=false}={}) {
     if(!uuid)return null;
-    try {
-      const result=await browser.runtime.sendMessage({
-        type:"SUP_LIFECYCLE_GET",uuids:[uuid]
-      });
-      if(!result?.ok)throw new Error(result?.error||"Brak połączenia z IMENO");
-      const found=(result.items||[]).find(row=>row.uuid===uuid);
-      lifecycleByUuid[uuid]=found||{uuid,lifecycle_revision:0,lifecycle_state:"active"};
+    if(!force && lifecycleByUuid[uuid] &&
+        Date.now()-(lifecycleLastFetchedAt[uuid]||0)<LIFECYCLE_FRESH_MS){
       if(refreshUI)updateToolbar();
       return lifecycleByUuid[uuid];
-    }catch(e){
-      if(refreshUI)updateToolbar();
-      return null;
     }
+    if(lifecycleInflight.has(uuid))return lifecycleInflight.get(uuid);
+    const promise=(async()=>{
+      try{
+        const result=await browser.runtime.sendMessage({
+          type:"SUP_LIFECYCLE_GET",uuids:[uuid]
+        });
+        if(!result?.ok)throw new Error(result?.error||"Brak połączenia z IMENO");
+        const found=(result.items||[]).find(row=>row.uuid===uuid);
+        lifecycleByUuid[uuid]=found||{uuid,lifecycle_revision:0,lifecycle_state:"active"};
+        lifecycleLastFetchedAt[uuid]=Date.now();
+        if(refreshUI)updateToolbar();
+        return lifecycleByUuid[uuid];
+      }catch(e){
+        if(refreshUI)updateToolbar();
+        return null;
+      }finally{lifecycleInflight.delete(uuid);}
+    })();
+    lifecycleInflight.set(uuid,promise);
+    return promise;
   }
 
   async function decideAvailability(state, {confirmed=false, archive}={}) {
@@ -327,7 +341,7 @@
     if(!confirmed && !window.confirm(text))return;
     busy=true;updateToolbar();
     try{
-      let current=await fetchLifecycle(uuid,{refreshUI:false});
+      let current=await fetchLifecycle(uuid,{refreshUI:false,force:true});
       if(!current){
         throw new Error("Nie udało się odczytać statusu w IMENO; spróbuj ponownie.");
       }
@@ -344,7 +358,7 @@
           url:location.origin+location.pathname
         });
         if(!created?.ok)throw new Error("Nie można zarejestrować obserwacji UUID w IMENO.");
-        current=await fetchLifecycle(uuid,{refreshUI:false})||
+        current=await fetchLifecycle(uuid,{refreshUI:false,force:true})||
           {uuid,lifecycle_revision:0};
         result=await send();
       }
@@ -1792,8 +1806,10 @@
       refreshProfiles(false);
       observeCurrentChat();
       void fetchLifecycle(currentUuid());
+      return true;
     }else{
       queueScan();
+      return false;
     }
   }
   function scheduleNavigationCheck(){
@@ -1813,9 +1829,9 @@
   }
   function suspendInvisibleUI(){
     visibilityEpoch++;
-    // A different tab may have changed Imeno while this one was parked.
-    // The next activation asks the shared background cache once, not Imeno per tab.
-    lastProfileAttemptSignature="";
+    // Preserve a recent profile snapshot when the user rapidly switches tabs.
+    // After 25 seconds, activation must revalidate through the shared cache.
+    if(Date.now()-profileLoadAt>=25000)lastProfileAttemptSignature="";
     if(navObserver){navObserver.disconnect();navObserver=null;}
     navRoot=null;
     if(sidebarMountObserver){sidebarMountObserver.disconnect();sidebarMountObserver=null;}
@@ -1839,17 +1855,25 @@
       if(root)panelResizeObserver.observe(root);
       panelResizeObserver.observe(bulkPanel);
     }
-    onNavigationChange();
+    const routeChanged=onNavigationChange();
     syncNativeMenu();
     refresh(false);
     refreshProfiles(false);
-    observeCurrentChat();
-    void fetchLifecycle(currentUuid());
+    // Navigation handler already fetched details when the URL changed.
+    if(!routeChanged){
+      observeCurrentChat();
+      void fetchLifecycle(currentUuid());
+    }
     if(filtersActive())scheduleIndexLoad(false);
   }
+  let ownerUiActive=false;
   function syncOwnerActivity(){
-    document.documentElement.classList.toggle("cgs-coordinator-parked",!cgsTabActive());
-    if(cgsTabActive())activateVisibleUI();
+    const next=cgsTabActive();
+    document.documentElement.classList.toggle("cgs-coordinator-parked",!next);
+    // visibilitychange and coordinator-active can both report one transition.
+    if(next===ownerUiActive)return;
+    ownerUiActive=next;
+    if(next)activateVisibleUI();
     else suspendInvisibleUI();
   }
   syncOwnerActivity();
@@ -1865,8 +1889,12 @@
   },true);
   // No periodic data polling. Refresh on real user/navigation/visibility events only.
   document.addEventListener("visibilitychange",()=>{
-    // Reconcile aliases even when Firefox emits a duplicate visible event.
-    if(cgsTabActive())lastProfileAttemptSignature="";
+    // Standalone legacy mode: explicit visibility event refreshes aliases.
+    // With the central coordinator, only a real owner transition does that.
+    if(cgsTabActive()&&!globalThis.CGS_COORDINATOR_CLIENT){
+      lastProfileAttemptSignature="";
+      void refreshProfiles(false);
+    }
     syncOwnerActivity();
   });
 })();

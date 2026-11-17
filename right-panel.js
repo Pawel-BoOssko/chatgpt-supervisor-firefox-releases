@@ -20,6 +20,8 @@
   let activeUuid=null,activeUrl="",context=null,epoch=0,open=true,busy=false;
   let selectedKeys=new Set(),currentNote="";
   let initialContextRetryUuid=null,contextRetryTimer=null;
+  let contextFetchedAt=0;
+  const CONTEXT_FRESH_MS=30000;
   const uuid=()=>(UUID_ROUTE.exec(location.pathname)||[])[1]?.toLowerCase()||null;
   const node=(tag,cls,txt)=>{
     const el=document.createElement(tag);
@@ -297,6 +299,7 @@
         return;
       }
       context=data;
+      contextFetchedAt=Date.now();
       initialContextRetryUuid=null;
       const valid=new Set((data.folders||[]).map(f=>f.key));
       selectedKeys=new Set([...selectedKeys].filter(key=>valid.has(key)));
@@ -391,13 +394,22 @@
     setTimeout(()=>checkRoute(false),0);
     setTimeout(()=>checkRoute(false),180);
   }
+  let ownerPanelActive=false;
   function syncOwnerActivity(){
+    const next=cgsTabActive();
+    if(next===ownerPanelActive)return;
+    ownerPanelActive=next;
     epoch++;
     if(contextRetryTimer){clearTimeout(contextRetryTimer);contextRetryTimer=null;}
-    if(!cgsTabActive()){
+    if(!next){
       if(shell)shell.hidden=true;
       document.documentElement.classList.remove("cgs-ir-open");
-    }else checkRoute(true);
+    }else{
+      // Reopening within 30s reuses the existing context. Manual reload
+      // and actual mutations remain forced, and route changes still reload.
+      const stale=!context||Date.now()-contextFetchedAt>CONTEXT_FRESH_MS;
+      checkRoute(stale);
+    }
   }
   document.addEventListener("visibilitychange",syncOwnerActivity);
   document.addEventListener("cgs:coordinator-active",syncOwnerActivity);
