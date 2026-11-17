@@ -21,7 +21,7 @@
   let selectedKeys=new Set(),currentNote="";
   let initialContextRetryUuid=null,contextRetryTimer=null;
   let contextFetchedAt=0;
-  const CONTEXT_FRESH_MS=30000;
+  const CONTEXT_FRESH_MS=300000;
   const uuid=()=>(UUID_ROUTE.exec(location.pathname)||[])[1]?.toLowerCase()||null;
   const node=(tag,cls,txt)=>{
     const el=document.createElement(tag);

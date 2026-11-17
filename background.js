@@ -42,7 +42,7 @@ async function rememberStatusError(error){
   }catch(_){}
 }
 async function getStatus(force = false) {
-  if (!force && statusCache && Date.now() - statusFetchedAt < 10000)
+  if (!force && statusCache && Date.now() - statusFetchedAt < 300000)
     return statusCache;
   if (statusInflight) return statusInflight;
   statusInflight = (async () => {
@@ -74,7 +74,7 @@ async function getProfiles(uuids, force = false) {
   if (!ids.length) return {ok:true, items:[]};
   const age = Date.now();
   const missing = ids.filter(id => force || !profiles.has(id) ||
-                                  age - profiles.get(id).at > 25000);
+                                  age - profiles.get(id).at > 1800000);
   if (missing.length) {
     if (profilesInflight) await profilesInflight;
     else {

@@ -40,7 +40,7 @@
   let lifecycleRequestedUuid="";
   const lifecycleLastFetchedAt=Object.create(null);
   const lifecycleInflight=new Map();
-  const LIFECYCLE_FRESH_MS=25000;
+  const LIFECYCLE_FRESH_MS=300000;
 
   let navObserver = null;
   let navRoot = null;
@@ -53,6 +53,8 @@
   const originalTitles=new WeakMap();
   let profileLoadRunning=false;
   let profileLoadAt=0;
+  let profileAttemptAt=0;
+  const PROFILE_READ_INTERVAL_MS=1800000;
   let lastProfileSignature="";
   let lastProfileAttemptSignature="";
   let observationLastAt=0;
@@ -186,10 +188,12 @@
     }
     return best;
   }
-  function currentVisibleIds() {
+  function currentVisibleIds({includeSidebar=false}={}) {
     const ids=[],set=new Set();
     const id=currentUuid();
     if (id){ids.push(id);set.add(id);}
+    // A is the active chat. Do not fetch B/C/D while A is being used.
+    if(!includeSidebar)return ids;
     for(const uuid of trackedSidebarLinks.keys()){
       if(set.has(uuid))continue;
       set.add(uuid);ids.push(uuid);
@@ -197,14 +201,17 @@
     }
     return ids;
   }
-  async function refreshProfiles(force=false) {
+  async function refreshProfiles(force=false,{includeSidebar=false}={}) {
     if (!cgsTabActive()||profileLoadRunning)return;
-    const ids=currentVisibleIds();
+    const ids=currentVisibleIds({includeSidebar});
     if(!ids.length)return;
     const signature=ids.join(",");
-    // Only new sidebar IDs, explicit actions or tab activation request profiles.
-    if(!force && signature===lastProfileAttemptSignature)return;
+    // A cached profile is reused for 30 min; even failed attempts are
+    // throttled. Sidebar-wide reads require an explicit filter or refresh.
+    if(!force && signature===lastProfileAttemptSignature &&
+       Date.now()-profileAttemptAt<PROFILE_READ_INTERVAL_MS)return;
     lastProfileAttemptSignature=signature;
+    profileAttemptAt=Date.now();
     profileLoadRunning=true;
     const requestEpoch=visibilityEpoch;
     try {
@@ -234,13 +241,13 @@
       profileLoadRunning=false;
       if(cgsTabActive()){
         if(requestEpoch!==visibilityEpoch){
-          // The tab was reactivated while an old request was still pending.
-          void refreshProfiles(true);
+          // Retry only the requested scope, without forced refresh of B/C/D.
+          lastProfileAttemptSignature="";
+          void refreshProfiles(false,{includeSidebar});
         }else{
           updateDataHealth();
-          // React may have mounted new sidebar links while the previous request ran.
-          if(currentVisibleIds().join(",")!==lastProfileAttemptSignature)
-            void refreshProfiles(false);
+          if(currentVisibleIds({includeSidebar}).join(",")!==lastProfileAttemptSignature)
+            void refreshProfiles(false,{includeSidebar});
         }
       }
     }
@@ -749,7 +756,7 @@
         bulkNotice("important="+value+": "+(i+1)+"/"+ids.length+
           ", sukces "+ok+", błędy "+failed.length);
       }
-      await refreshProfiles(true);
+      await refreshProfiles(true,{includeSidebar:true});
       applyBulkFilter();
       bulkNotice("important="+value+": wykonano "+ok+"/"+ids.length+
         ", błędy "+failed.length+(failed.length?" · "+failed.slice(0,2).join("; "):""),
@@ -956,7 +963,7 @@
     manualRefresh.addEventListener("click",()=>{
       if(!cgsTabActive())return;
       refresh(true);
-      refreshProfiles(true);
+      refreshProfiles(true,{includeSidebar:true});
     });
     health.append(healthValue,manualRefresh);
     panel.append(health);
@@ -980,6 +987,7 @@
     search.className="cgs-bulk-search";search.value=bulkFilter;
     search.addEventListener("input",()=>{
       bulkFilter=search.value;filterResultLimit=100;
+      if(filtersActive())void refreshProfiles(false,{includeSidebar:true});
       applyBulkFilter();scheduleIndexLoad();
     });
     panel.append(search);
@@ -1004,6 +1012,7 @@
             peer.setAttribute("aria-pressed",
               String(peer.dataset.filterValue===value));
           logAction("click","filter_"+key,value,[...bulkSelected]);
+          if(filtersActive())void refreshProfiles(false,{includeSidebar:true});
           applyBulkFilter();scheduleIndexLoad();
         });
         optionsWrap.append(b);
@@ -1204,8 +1213,8 @@
     }
     applyBulkFilter();
     updateToolbar();
-    // Sidebar links can arrive after initial page load; fetch those profiles once.
-    if(!profileLoadRunning)void refreshProfiles(false);
+    // Only paint already known data; a sidebar DOM change does not
+    // authorize a background fetch for unrelated conversation profiles.
   }
   function queueScan() {
     if (!cgsTabActive()) return;
@@ -1268,24 +1277,16 @@
         for(const record of records){
           if(record.target.closest?.("#cgs-filter-results,#cgs-bulk-panel,#cgs-status-actions"))
             continue;
-          if(record.type==="characterData"){
-            const link=record.target.parentElement?.closest("a[href*='/c/']");
-            if(!link||!isSidebarLink(link))continue;
-            const imeno=originalTitles.get(link);
-            if(imeno?.node===record.target && record.target.nodeValue===imeno.applied)
-              continue;
-            queueScan();return;
-          }
+          // Titles are user-controlled and are never polled/observed.
           if([...record.addedNodes,...record.removedNodes].some(node=>
             node.nodeType===1 && (node.matches?.("a[href*='/c/']")||
-            node.querySelector?.("a[href*='/c/']")||
-            node.closest?.("a[href*='/c/']")))){
+            node.querySelector?.("a[href*='/c/']")))){
             queueScan();
             return;
           }
         }
       });
-      navObserver.observe(root,{childList:true,subtree:true,characterData:true});
+      navObserver.observe(root,{childList:true,subtree:true});
     }
   }
   function updateDataHealth(){
@@ -1807,10 +1808,9 @@
       observeCurrentChat();
       void fetchLifecycle(currentUuid());
       return true;
-    }else{
-      queueScan();
-      return false;
     }
+    // A duplicate navigation signal without URL change requires no scan.
+    return false;
   }
   function scheduleNavigationCheck(){
     setTimeout(onNavigationChange,0);
@@ -1831,7 +1831,8 @@
     visibilityEpoch++;
     // Preserve a recent profile snapshot when the user rapidly switches tabs.
     // After 25 seconds, activation must revalidate through the shared cache.
-    if(Date.now()-profileLoadAt>=25000)lastProfileAttemptSignature="";
+    if(Date.now()-profileAttemptAt>=PROFILE_READ_INTERVAL_MS)
+      lastProfileAttemptSignature="";
     if(navObserver){navObserver.disconnect();navObserver=null;}
     navRoot=null;
     if(sidebarMountObserver){sidebarMountObserver.disconnect();sidebarMountObserver=null;}
@@ -1846,6 +1847,7 @@
   }
   function activateVisibleUI(){
     if(!cgsTabActive())return;
+    const previouslyInitialized=initialized;
     initializeVisibleUI();
     watchSidebar();
     watchNativeMenus();
@@ -1856,12 +1858,16 @@
       panelResizeObserver.observe(bulkPanel);
     }
     const routeChanged=onNavigationChange();
+    // Structural changes while this tab was parked were not observed.
+    // One local repaint on reactivation; no Imeno fetch for other chats.
+    if(!routeChanged && previouslyInitialized)queueScan();
     syncNativeMenu();
     refresh(false);
     refreshProfiles(false);
     // Navigation handler already fetched details when the URL changed.
     if(!routeChanged){
-      observeCurrentChat();
+      // First activation observes A once; later focus switches reuse data.
+      if(!observationLastTryAt)observeCurrentChat();
       void fetchLifecycle(currentUuid());
     }
     if(filtersActive())scheduleIndexLoad(false);
@@ -1881,7 +1887,9 @@
   // React navigation is handled by sidebar mutations and native navigation events.
   window.addEventListener("popstate",onNavigationChange);
   window.addEventListener("hashchange",onNavigationChange);
-  window.addEventListener("pageshow",onNavigationChange);
+  window.addEventListener("pageshow",event=>{
+    if(event.persisted)onNavigationChange();
+  });
   window.navigation?.addEventListener?.("navigatesuccess",onNavigationChange);
   document.addEventListener("click",event=>{
     if(event.target.closest?.("a[href*='/c/'],a[href='/']"))
