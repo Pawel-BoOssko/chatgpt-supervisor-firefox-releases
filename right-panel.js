@@ -14,6 +14,7 @@
   let shell=null,body=null,statusLine=null,toggle=null;
   let activeUuid=null,activeUrl="",context=null,epoch=0,open=true,busy=false;
   let selectedKeys=new Set(),currentNote="";
+  let initialContextRetryUuid=null,contextRetryTimer=null;
   const uuid=()=>(UUID_ROUTE.exec(location.pathname)||[])[1]?.toLowerCase()||null;
   const node=(tag,cls,txt)=>{
     const el=document.createElement(tag);
@@ -82,11 +83,21 @@
     if(!shell)return;
     const old=document.getElementById("cgs-status-actions");
     const dock=shell.querySelector(".cgs-ir-chat-actions");
-    if(old&&dock&&!dock.contains(old))dock.append(old);
+    const left=document.getElementById("cgs-bulk-panel");
+    if(!old)return;
+    // The legend describes the left chat list, not the current chat.
+    const legend=old.querySelector(".cgs-legend");
+    if(legend&&left){
+      const target=left.querySelector(".cgs-data-health");
+      if(target)target.after(legend);
+      else left.prepend(legend);
+    }
+    if(dock&&!dock.contains(old))dock.append(old);
   }
   function applyExpanded(){
     if(!shell)return;
     shell.dataset.collapsed=open?"no":"yes";
+    document.documentElement.classList.toggle("cgs-ir-open",open&&!shell.hidden);
     toggle.textContent=open?"IMENO ▶":"IMENO ◀";
     toggle.setAttribute("aria-expanded",open?"true":"false");
   }
@@ -145,6 +156,21 @@
     if(f.disposition==="archive_candidate")return "Kandydat do archiwizacji";
     return "Brak dowodu aktualnego opiekuna";
   }
+  function observedFileState(f){
+    if(!f.file_scanned_at)return "Brak potwierdzonego skanu folderu.";
+    if(f.file_scan_status&&/error|failed|unavailable/i.test(f.file_scan_status))
+      return "Ostatni skan zakończył się błędem — stan pracy nieznany.";
+    const stamp=f.last_file_modified_at||f.last_file_change_detected_at;
+    if(!stamp)return "Folder sprawdzony; brak potwierdzonej modyfikacji plików.";
+    const delta=Date.now()-new Date(stamp).getTime();
+    if(!Number.isFinite(delta))return "Nie można ustalić wieku ostatniej modyfikacji.";
+    if(delta<0)return "Czas modyfikacji jest późniejszy niż zegar lokalny.";
+    const mins=Math.floor(delta/60000);
+    if(mins<10)return "Wykryto niedawną modyfikację plików ("+mins+" min temu).";
+    if(mins<60)return "Modyfikacja plików "+mins+" min temu.";
+    if(mins<720)return "Modyfikacja plików "+Math.floor(mins/60)+" godz. temu.";
+    return "Brak modyfikacji plików przez co najmniej 12 godzin.";
+  }
   function renderFolders(c){
     const folders=Array.isArray(c.folders)?c.folders:[];
     const section=group("Foldery i opiekunowie ("+folders.length+")");
@@ -170,6 +196,9 @@
       line(wrap,"Ocena opieki",describeCaretaker(f));
       line(wrap,"Stan przeglądu",f.review_state);
       line(wrap,"Stan folderu",f.caretaker_state);
+      line(wrap,"Sygnał pracy w plikach",observedFileState(f));
+      wrap.append(node("p","cgs-ir-muted",
+        "Modyfikacja plików nie dowodzi, że czat wykonuje teraz zadanie."));
       line(wrap,"Ostatnia zmiana merytoryczna (indeks)",f.last_substantive_change_at);
       line(wrap,"Pewność tego oszacowania",f.substantive_change_confidence);
       line(wrap,"Ostatni skan",f.file_scanned_at);
@@ -226,8 +255,9 @@
     body.replaceChildren();
     if(!activeUuid)return;
     if(!context){
-      body.append(node("p","cgs-ir-muted","Brak danych Imeno. UUID i adres rozmowy nadal pozostają znane."));
-      line(body,"UUID",activeUuid);
+      body.append(node("p","cgs-ir-muted",
+        "Dane Imeno nie zostały pobrane. UUID poniżej pochodzi z adresu ChatGPT, a nie z potwierdzonego odczytu Imeno."));
+      line(body,"UUID z adresu",activeUuid);
       return;
     }
     const c=context;
@@ -242,16 +272,27 @@
     const startEpoch=epoch;
     activeUuid=uid;
     ensureUI();
+    if(contextRetryTimer){clearTimeout(contextRetryTimer);contextRetryTimer=null;}
     setStatus("Odczyt kontekstu z Imeno…");
     try{
       const data=await browser.runtime.sendMessage({type:"SUP_CONTEXT_GET",uuid:uid,force:!!force});
       if(document.hidden||startEpoch!==epoch||uid!==uuid())return;
       if(!data?.ok){
         context=null;render();
-        setStatus("Imeno: "+(data?.error||"brak odpowiedzi"),true);
+        const reason=String(data?.error||"brak odpowiedzi");
+        setStatus("Imeno: "+(/abort/i.test(reason)?"przerwano odczyt":reason),true);
+        // One bounded retry after the first transient startup failure, never polling.
+        if(initialContextRetryUuid!==uid&&/abort|timeout|failed to fetch/i.test(reason)){
+          initialContextRetryUuid=uid;
+          contextRetryTimer=setTimeout(()=>{
+            contextRetryTimer=null;
+            if(!document.hidden&&uuid()===uid&&epoch===startEpoch)void refresh(true);
+          },1300);
+        }
         return;
       }
       context=data;
+      initialContextRetryUuid=null;
       const valid=new Set((data.folders||[]).map(f=>f.key));
       selectedKeys=new Set([...selectedKeys].filter(key=>valid.has(key)));
       render();
@@ -323,10 +364,15 @@
   function checkRoute(force=false){
     if(document.hidden)return;
     const id=uuid();
-    if(!id){if(shell)shell.hidden=true;activeUuid=null;activeUrl="";context=null;return;}
+    if(!id){
+      if(shell)shell.hidden=true;
+      document.documentElement.classList.remove("cgs-ir-open");
+      activeUuid=null;activeUrl="";context=null;return;
+    }
     ensureUI();if(!shell)return;
     dockCurrentChatActions();
     shell.hidden=false;
+    applyExpanded();
     if(id!==activeUuid){
       epoch++;activeUuid=id;activeUrl=location.href;context=null;selectedKeys.clear();currentNote="";
       render();void refresh(true);
@@ -342,12 +388,16 @@
   }
   document.addEventListener("visibilitychange",()=>{
     epoch++;
-    if(document.hidden){if(shell)shell.hidden=true;}
-    else checkRoute(true);
+    if(contextRetryTimer){clearTimeout(contextRetryTimer);contextRetryTimer=null;}
+    if(document.hidden){
+      if(shell)shell.hidden=true;
+      document.documentElement.classList.remove("cgs-ir-open");
+    }else checkRoute(true);
   });
   window.addEventListener("popstate",navigateSoon);
   window.addEventListener("hashchange",navigateSoon);
   window.addEventListener("pageshow",()=>checkRoute(false));
+  document.addEventListener("cgs:toolbar-ready",()=>dockCurrentChatActions());
   window.navigation?.addEventListener?.("navigatesuccess",navigateSoon);
   document.addEventListener("click",event=>{
     if(event.target.closest?.("a[href*='/c/']"))navigateSoon();

@@ -1527,6 +1527,7 @@
     }else document.body.appendChild(node);
     toolbar=node;
     updateToolbar();
+    document.dispatchEvent(new CustomEvent("cgs:toolbar-ready"));
   }
   // Live status of the UUID shown in the main ChatGPT conversation header.
   // Keep this element outside React's own header so native menu clicks work.

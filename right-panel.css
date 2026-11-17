@@ -165,3 +165,37 @@
     transform:translateX(calc(100% - 45px))!important;
   }
 }
+
+/* 2026-11-17 afternoon: make room for chat, keeping sidebar independent. */
+#cgs-imeno-right-shell{
+  width:clamp(295px,20vw,350px)!important;
+  top:76px!important;
+  height:calc(100vh - 91px)!important;
+}
+#cgs-imeno-right-shell .cgs-ir-toggle{
+  width:36px!important;min-width:36px!important;
+}
+/* Reserve space in ChatGPT's conversation layout rather than overlaying text.
+   This applies only while the right panel is visible and expanded. */
+@media(min-width:1120px){
+  html.cgs-ir-open body main{
+    padding-right:clamp(295px,20vw,350px)!important;
+    box-sizing:border-box!important;
+  }
+}
+@media(max-width:1119px){
+  #cgs-imeno-right-shell{width:min(320px,calc(100vw - 48px))!important}
+}
+#cgs-bulk-panel .cgs-legend{
+  display:flex!important;flex-wrap:wrap!important;
+  gap:3px 8px!important;
+  padding:6px 0 8px!important;
+  border-bottom:1px solid rgba(145,153,165,.4)!important;
+  color:#e2e8f1!important;
+  font:10.5px/1.4 system-ui,sans-serif!important;
+}
+#cgs-bulk-panel .cgs-legend span{white-space:nowrap!important}
+#cgs-bulk-panel .cgs-legend .cgs-dot{
+  display:inline-block!important;width:9px!important;height:9px!important;
+  border-radius:50%!important;margin-right:3px!important;vertical-align:baseline!important;
+}
