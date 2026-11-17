@@ -1060,6 +1060,65 @@
     button("Archiwizuj",bulkArchive);
     button("↻ Dodaj do wybudzania",bulkWake);
     button("Odśwież listę",()=>scheduleIndexLoad(true));
+    // Suspected absence is inferred from a FULL inventory, never 180 sidebar links.
+    button("Prawdopodobnie usunięte",async()=>{
+      const result=await browser.runtime.sendMessage({
+        type:"SUP_INVENTORY_STATUS",limit:100
+      });
+      if(!result?.ok){
+        bulkNotice("Inwentaryzacja: "+(result?.error||"brak danych"),true);
+        return;
+      }
+      const count=Number(result.probably_deleted||0);
+      bulkNotice("Rejestr: "+Number(result.total||0)+" rozmów; "+count+
+        " prawdopodobnie usuniętych. Ostatni pełny przegląd: "+
+        (result.last_completed_at||"jeszcze nie wykonano"));
+      let box=panel.querySelector(".cgs-inventory-suspects");
+      if(!box){
+        box=document.createElement("div");
+        box.className="cgs-inventory-suspects";
+        box.setAttribute("role","region");
+        box.setAttribute("aria-label","Czaty prawdopodobnie usunięte");
+        panel.append(box);
+      }
+      const title=document.createElement("strong");
+      title.textContent="Prawdopodobnie usunięte: "+count;
+      const note=document.createElement("div");
+      note.textContent="Rekordy pozostają w bazie. Brak w indeksie może również oznaczać archiwizację.";
+      box.replaceChildren(title,note);
+      for(const row of (result.suspects||[]).slice(0,40)){
+        const line=document.createElement("div");
+        line.className="cgs-inventory-suspect-row";
+        const link=document.createElement("a");
+        link.href="/c/"+row.uuid;
+        link.textContent=row.title||row.uuid;
+        link.title=row.uuid;
+        const meta=document.createElement("small");
+        meta.textContent=" · ostatnio: "+(row.last_seen_at||"?")+
+          " · brak w "+row.missing_count+" przeglądach";
+        line.append(link,meta);box.append(line);
+      }
+      if(count>40){
+        const more=document.createElement("div");
+        more.textContent="Pokazano 40 z "+count+". Pełna ewidencja pozostaje w bazie.";
+        box.append(more);
+      }
+    });
+    button("Pełny przegląd historii",async()=>{
+      const controller=globalThis.CGS_INVENTORY_CONTROL;
+      if(!controller?.runNow){
+        bulkNotice("Moduł inwentaryzacji jest niedostępny.",true);return;
+      }
+      bulkNotice("Trwa pełna inwentaryzacja rozmów. Nie usuwam rekordów.");
+      const result=await controller.runNow();
+      bulkNotice(result?.ok
+        ?("Przegląd: "+(result.total||0)+" rozmów; "+
+          (result.probably_deleted||0)+" prawdopodobnie usuniętych; "+
+          (result.restored||0)+" przywróconych.")
+        :("Przegląd nieukończony: "+(result?.error||"brak danych")+
+          ". Bez zmiany oznaczeń."),
+        !result?.ok);
+    });
     panel.append(actions);
     const projectRow=document.createElement("div");
     projectRow.className="cgs-project-row";

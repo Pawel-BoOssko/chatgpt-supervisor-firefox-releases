@@ -633,3 +633,26 @@ a.cgs-status-link.cgs-important{
 }
 #cgs-status-actions .cgs-lifecycle-label[data-state="dead_manual"]{color:#ff939f!important;}
 #cgs-status-actions .cgs-lifecycle-label[data-state="temporary_unavailable"]{color:#ffdc8a!important;}
+
+/* On-demand, read-only review of probably-deleted chat inventory entries. */
+#cgs-bulk-panel .cgs-inventory-suspects {
+  border-top:1px solid #657182;
+  padding:8px;
+  margin:8px 0;
+  max-height:260px;
+  overflow:auto;
+  font-size:11px;
+  line-height:1.45;
+  color:#d5dbe3;
+}
+#cgs-bulk-panel .cgs-inventory-suspect-row {
+  display:flex;
+  flex-wrap:wrap;
+  gap:3px;
+  margin:5px 0;
+}
+#cgs-bulk-panel .cgs-inventory-suspect-row a {
+  color:#a3c9ff;
+  overflow-wrap:anywhere;
+}
+#cgs-bulk-panel .cgs-inventory-suspect-row small {opacity:.75}

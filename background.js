@@ -337,6 +337,59 @@ async function getBuildStatus(force=false){
   finally{updateStatusInflight=null;}
 }
 
+// Persistent presence registry on SATANAMD. No periodic HTTP polling in the
+// background: the 6-hour browser alarm only asks the elected visible tab
+// whether a full, account-scoped scan is due.
+let inventoryStatusCache=null,inventoryStatusAt=0,inventoryStatusKey="";
+async function getInventoryStatus(message={}){
+  const account=String(message.account_key||"");
+  const limit=Number(message.limit||0);
+  const key=account+"|"+limit;
+  if(limit===0&&inventoryStatusCache&&key===inventoryStatusKey&&
+     Date.now()-inventoryStatusAt<120000)return inventoryStatusCache;
+  try{
+    const qs=new URLSearchParams();
+    if(account)qs.set("account",account);
+    if(limit)qs.set("limit",String(limit));
+    const result=await jsonRequest("/api/inventory/status"+
+      (qs.size?"?"+qs:""),{},12000);
+    if(limit===0){inventoryStatusCache=result;inventoryStatusAt=Date.now();inventoryStatusKey=key;}
+    return result;
+  }catch(e){return {ok:false,error:String(e.message||e)};}
+}
+async function inventoryPost(action,message){
+  const endpoints={start:"start",page:"page",finish:"finish",abort:"abort"};
+  if(!endpoints[action])return {ok:false,error:"invalid_inventory_action"};
+  const data={...message};
+  delete data.type;
+  try{
+    const result=await jsonRequest("/api/inventory/"+action,{
+      method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(data)},20000);
+    if(action==="finish"){inventoryStatusCache=null;inventoryStatusAt=0;}
+    return result;
+  }catch(e){
+    return {ok:false,error:String(e.message||e),http_status:e.http_status||null};
+  }
+}
+const INVENTORY_ALARM="cgs-chat-inventory-six-hours";
+if(browser.alarms?.create&&browser.alarms?.get){
+  try{
+    // The event page may restart frequently. Do not postpone the 6-hour alarm
+    // on every background wake-up; create it only if it does not exist.
+    void browser.alarms.get(INVENTORY_ALARM).then(existing=>{
+      if(!existing)return browser.alarms.create(
+        INVENTORY_ALARM,{periodInMinutes:360});
+    }).catch(()=>{});
+    browser.alarms.onAlarm.addListener(alarm=>{
+      if(alarm.name!==INVENTORY_ALARM)return;
+      const id=globalThis.CGS_COORDINATOR?.getOwner();
+      if(Number.isInteger(id))
+        browser.tabs.sendMessage(id,{type:"SUP_INVENTORY_CHECK"}).catch(()=>{});
+    });
+  }catch(e){console.warn("Inventory alarm unavailable:",String(e));}
+}
+
 browser.runtime.onMessage.addListener((message,sender)=>{
   if(message && message.type==="SUP_COORD_REGISTER")
     return globalThis.CGS_COORDINATOR?.register(sender)
@@ -344,6 +397,16 @@ browser.runtime.onMessage.addListener((message,sender)=>{
   if(message && message.type==="SUP_COORD_STATUS")
     return Promise.resolve({ok:true,ownerTabId:globalThis.CGS_COORDINATOR?.getOwner(),
       epoch:globalThis.CGS_COORDINATOR?.getEpoch()});
+  if(message && message.type==="SUP_INVENTORY_STATUS")
+    return getInventoryStatus(message);
+  if(message && message.type==="SUP_INVENTORY_START")
+    return inventoryPost("start",message);
+  if(message && message.type==="SUP_INVENTORY_PAGE")
+    return inventoryPost("page",message);
+  if(message && message.type==="SUP_INVENTORY_FINISH")
+    return inventoryPost("finish",message);
+  if(message && message.type==="SUP_INVENTORY_ABORT")
+    return inventoryPost("abort",message);
   if(message && message.type==="SUP_BUILD_STATUS")
     return getBuildStatus(!!message.force);
   if(message && message.type==="SUP_STATUS_GET")
