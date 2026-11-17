@@ -612,3 +612,24 @@ a.cgs-status-link.cgs-important{
   border-color:#efc75b!important;
   color:#fff0c3!important;
 }
+
+/* IMENO manual disposition: fixed toolbar survives a failed conversation load. */
+#cgs-status-actions {max-width:min(660px,calc(100vw - 28px))!important;flex-wrap:wrap!important;}
+#cgs-status-actions button.cgs-action-temporary,
+#cgs-status-actions button.cgs-action-dead,
+#cgs-status-actions button.cgs-action-restore {
+  flex:0 0 auto!important;width:auto!important;min-width:64px!important;
+  max-width:none!important;height:35px!important;min-height:35px!important;
+  padding:3px 8px!important;font:600 12px system-ui,sans-serif!important;
+}
+#cgs-status-actions button.cgs-action-temporary{background:#9b7628!important;color:#fff!important;}
+#cgs-status-actions button.cgs-action-dead{background:#b82b3d!important;color:#fff!important;}
+#cgs-status-actions button.cgs-action-restore{background:#216f60!important;color:#fff!important;}
+#cgs-status-actions .cgs-lifecycle-label{
+  display:inline-flex!important;align-items:center!important;
+  padding:4px 8px!important;min-height:30px!important;
+  font:600 11px system-ui,sans-serif!important;
+  color:#dce6f5!important;white-space:nowrap!important;
+}
+#cgs-status-actions .cgs-lifecycle-label[data-state="dead_manual"]{color:#ff939f!important;}
+#cgs-status-actions .cgs-lifecycle-label[data-state="temporary_unavailable"]{color:#ffdc8a!important;}

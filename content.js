@@ -31,6 +31,9 @@
   let toolbar = null;
   let busy = false;
   let lastPath = location.pathname;
+  const lifecycleByUuid=Object.create(null);
+  let lifecycleRequestedUuid="";
+
   let navObserver = null;
   let navRoot = null;
   let scanQueued = false;
@@ -267,12 +270,16 @@
         title=documentTitle;
       else title="";
     }
+    if(/nie udało się wczytać tej rozmowy|unable to load (?:this )?conversation/i.test(
+      (document.body?.innerText||"").slice(0,2400)))title="";
     const declaration=ownMcpNickFromAssistant();
-    const signature=uuid+"|"+title+"|"+(declaration||"");
+    const signature=uuid+"|"+title+"|"+(declaration||"")+"|"+location.pathname;
     if(signature===observationLastSuccess && now-observationLastAt<300000)return;
     try{
       const result=await browser.runtime.sendMessage({
-        type:"SUP_BROWSER_OBSERVE",uuid,title,
+        type:"SUP_BROWSER_OBSERVE",uuid,
+        ...(title?{title}:{}),url:location.origin+location.pathname,
+        source:"current_chat",
         ...(declaration?{mcp_nick_declaration:declaration}:{})
       });
       if(result && result.ok){
@@ -282,9 +289,81 @@
     }catch(e){}
   }
   function currentUuid() {
-    const m = UUID_PATH.exec(location.pathname);
+    const m = UUID_LINK.exec(location.pathname);
     return m ? m[1].toLowerCase() : null;
   }
+  async function fetchLifecycle(uuid, {refreshUI=true}={}) {
+    if(!uuid)return null;
+    try {
+      const result=await browser.runtime.sendMessage({
+        type:"SUP_LIFECYCLE_GET",uuids:[uuid]
+      });
+      if(!result?.ok)throw new Error(result?.error||"Brak połączenia z IMENO");
+      const found=(result.items||[]).find(row=>row.uuid===uuid);
+      lifecycleByUuid[uuid]=found||{uuid,lifecycle_revision:0,lifecycle_state:"active"};
+      if(refreshUI)updateToolbar();
+      return lifecycleByUuid[uuid];
+    }catch(e){
+      if(refreshUI)updateToolbar();
+      return null;
+    }
+  }
+
+  async function decideAvailability(state, {confirmed=false, archive}={}) {
+    const uuid=currentUuid();
+    if(!uuid||busy)return;
+    const text=state==="dead_manual"
+      ?"Oznaczyć ten czat jako MARTWY? Zniknie z aktywnych przepływów IMENO, a historia pozostanie do audytu. Późniejsze przywrócenie będzie możliwe."
+      :state==="temporary_unavailable"
+      ?"Oznaczyć ten czat jako CZASOWO NIEDOSTĘPNY? Zostanie zawieszony do Twojej decyzji o przywróceniu."
+      :state==="active"
+      ?"Przywrócić ten czat do aktywnych przepływów IMENO?"
+      :"Oznaczyć czat jako zakończony?";
+    if(!confirmed && !window.confirm(text))return;
+    busy=true;updateToolbar();
+    try{
+      let current=await fetchLifecycle(uuid,{refreshUI:false});
+      if(!current){
+        throw new Error("Nie udało się odczytać statusu w IMENO; spróbuj ponownie.");
+      }
+      const send=()=>browser.runtime.sendMessage({
+        type:"SUP_LIFECYCLE_UPDATE",uuid,state,
+        expected_revision:Number(current.lifecycle_revision||0),
+        ...(archive?{archive}:{})
+      });
+      let result=await send();
+      if(result?.status==="not_found" || /not_found/i.test(result?.error||"")){
+        // Unknown URL is still a valid browser observation, not an MCP registration.
+        const created=await browser.runtime.sendMessage({
+          type:"SUP_BROWSER_OBSERVE",uuid,
+          url:location.origin+location.pathname
+        });
+        if(!created?.ok)throw new Error("Nie można zarejestrować obserwacji UUID w IMENO.");
+        current=await fetchLifecycle(uuid,{refreshUI:false})||
+          {uuid,lifecycle_revision:0};
+        result=await send();
+      }
+      if(!result?.ok || !["updated","unchanged"].includes(result.status))
+        throw new Error(result?.error||result?.status||"Nie potwierdzono zapisu");
+      lifecycleByUuid[uuid]={
+        ...current,lifecycle_state:state,
+        archive_state:result.archive_state || current.archive_state,
+        monitoring_excluded:!!result.monitoring_excluded,
+        lifecycle_revision:result.revision
+      };
+      toast(state==="dead_manual"
+        ?"IMENO: czat oznaczony MARTWY i wyłączony z aktywnych przepływów."
+        :state==="temporary_unavailable"
+          ?"IMENO: czat czasowo niedostępny."
+          :"IMENO: przywrócono czat.",false);
+      refreshProfiles(true);
+      if(state==="dead_manual" && result.nadzor_cleanup?.status!=="ok")
+        toast("Czat MARTWY w IMENO. Wyłączenie w Nadzorze oczekuje na ponowienie.",true);
+    }catch(e){
+      toast("IMENO: "+(e.message||e),true);
+    }finally{busy=false;updateToolbar();}
+  }
+
   function uuidForLink(a) {
     const url = a.getAttribute("href") || "";
     const m = UUID_LINK.exec(url);
@@ -1417,6 +1496,10 @@
       });
       node.appendChild(b);
     }
+    const stateLabel=document.createElement("span");
+    stateLabel.className="cgs-lifecycle-label";
+    stateLabel.setAttribute("role","status");
+    node.appendChild(stateLabel);
     const msg=document.createElement("div");
     msg.className="cgs-toast";msg.hidden=true;
     msg.setAttribute("role","status");
@@ -1658,10 +1741,26 @@
     const star=toolbar.querySelector(".cgs-action-important");
     const edit=toolbar.querySelector(".cgs-action-imeno");
     const profile=profiles[id];
-    join.disabled=busy || status.registered;
+    const disposition=lifecycleByUuid[id]?.lifecycle_state||"active";
+    const disabledState=["dead_manual","temporary_unavailable","missing_reported","deleted_verified"].includes(disposition);
+    const temporary=toolbar.querySelector(".cgs-action-temporary");
+    const dead=toolbar.querySelector(".cgs-action-dead");
+    const restore=toolbar.querySelector(".cgs-action-restore");
+    if(temporary)temporary.disabled=busy||disposition==="temporary_unavailable"||disposition==="dead_manual";
+    if(dead)dead.disabled=busy||disposition==="dead_manual";
+    if(restore)restore.disabled=busy||disposition==="active";
+    const stateLabel=toolbar.querySelector(".cgs-lifecycle-label");
+    if(stateLabel){
+      stateLabel.textContent=disposition==="dead_manual"?"IMENO: MARTWY":
+        disposition==="temporary_unavailable"||disposition==="missing_reported"
+          ?"IMENO: czasowo niedostępny":
+        disposition==="retired"?"IMENO: zakończony":"IMENO: aktywny";
+      stateLabel.dataset.state=disposition;
+    }
+    join.disabled=busy || status.registered || disabledState;
     leave.disabled=busy || !status.registered || !connected;
-    archive.disabled=busy;
-    wake.disabled=busy;
+    archive.disabled=busy || disposition==="dead_manual";
+    wake.disabled=busy || disabledState;
     star.disabled=busy || !profile;
     edit.disabled=busy || !profile;
     const important=profile && profile.important===1;
@@ -1686,6 +1785,7 @@
       queueScan();
       refreshProfiles(false);
       observeCurrentChat();
+      void fetchLifecycle(currentUuid());
     }else{
       queueScan();
     }
@@ -1735,6 +1835,7 @@
     refresh(true);
     refreshProfiles(true);
     observeCurrentChat();
+    void fetchLifecycle(currentUuid());
     if(filtersActive())scheduleIndexLoad(true);
   }
   activateVisibleUI();

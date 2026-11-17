@@ -1,0 +1,167 @@
+/* Independent Imeno context drawer; affects only nodes owned by the extension. */
+#cgs-imeno-right-shell{
+  position:fixed!important;top:82px!important;right:0!important;
+  height:min(82vh,calc(100vh - 100px))!important;
+  width:min(435px,calc(100vw - 46px))!important;
+  z-index:2147482500!important;display:flex!important;
+  color:#eef2f7!important;background:#1c2028!important;
+  border:1px solid #596675!important;border-right:0!important;
+  border-radius:12px 0 0 12px!important;
+  box-shadow:-5px 7px 22px rgba(0,0,0,.33)!important;
+  font:12px/1.42 system-ui,sans-serif!important;
+  box-sizing:border-box!important;
+  transition:transform .15s ease!important;
+  color-scheme:dark!important;
+}
+#cgs-imeno-right-shell[hidden]{display:none!important}
+#cgs-imeno-right-shell[data-collapsed="yes"]{
+  transform:translateX(calc(100% - 45px))!important;
+}
+#cgs-imeno-right-shell *{box-sizing:border-box!important}
+#cgs-imeno-right-shell .cgs-ir-toggle{
+  width:45px!important;min-width:45px!important;
+  border:0!important;border-right:1px solid #566276!important;
+  color:#ffe2a0!important;background:#303845!important;
+  border-radius:11px 0 0 11px!important;
+  padding:8px 4px!important;writing-mode:vertical-rl!important;
+  font:700 12px/1.2 system-ui,sans-serif!important;
+  cursor:pointer!important;
+}
+#cgs-imeno-right-shell .cgs-ir-panel{
+  min-width:0!important;flex:1!important;
+  display:flex!important;flex-direction:column!important;overflow:hidden!important;
+}
+#cgs-imeno-right-shell .cgs-ir-header{
+  padding:10px 12px!important;border-bottom:1px solid #495563!important;
+  background:#252c37!important;display:flex!important;gap:5px!important;
+  flex-wrap:wrap!important;align-items:center!important;
+}
+#cgs-imeno-right-shell .cgs-ir-header-title{
+  font-weight:750!important;font-size:14px!important;
+  flex:1 1 70%!important;color:#f4f7fb!important;
+}
+#cgs-imeno-right-shell .cgs-ir-build{
+  order:3!important;width:100%!important;color:#bac8d8!important;
+  overflow-wrap:anywhere!important;
+}
+#cgs-imeno-right-shell button.cgs-ir-reload,
+#cgs-imeno-right-shell button.cgs-ir-action{
+  cursor:pointer!important;border:1px solid #7b90a6!important;
+  border-radius:7px!important;background:#344354!important;
+  color:#f5f7fc!important;padding:6px 9px!important;
+  font:600 12px/1.2 system-ui,sans-serif!important;
+}
+#cgs-imeno-right-shell button:disabled{opacity:.4!important;cursor:wait!important}
+#cgs-imeno-right-shell .cgs-ir-status{
+  padding:7px 11px!important;border-bottom:1px solid #465061!important;
+  background:#1d3640!important;color:#b3e8e5!important;
+  font-size:11px!important;overflow-wrap:anywhere!important;
+}
+#cgs-imeno-right-shell .cgs-ir-status[data-error="yes"]{
+  background:#4c292d!important;color:#ffd3ca!important;
+}
+#cgs-imeno-right-shell .cgs-ir-body{
+  flex:1!important;overflow-y:auto!important;overflow-x:hidden!important;
+  padding:8px 12px 20px!important;overscroll-behavior:contain!important;
+  scrollbar-color:#667387 #20252d!important;
+}
+#cgs-imeno-right-shell .cgs-ir-section{
+  margin:5px 0 13px!important;padding:7px 0 11px!important;
+  border-bottom:1px solid #414b59!important;
+}
+#cgs-imeno-right-shell h3{
+  font:700 13px/1.25 system-ui,sans-serif!important;
+  color:#ffda90!important;margin:0 0 7px!important;
+}
+#cgs-imeno-right-shell .cgs-ir-line{
+  margin:5px 0!important;overflow-wrap:anywhere!important;
+  white-space:normal!important;color:#e0e7f0!important;
+}
+#cgs-imeno-right-shell strong{color:#c4d8ed!important}
+#cgs-imeno-right-shell .cgs-ir-url{
+  color:#91d8ff!important;text-decoration:underline!important;
+  display:block!important;overflow-wrap:anywhere!important;font-size:10px!important;
+}
+#cgs-imeno-right-shell .cgs-ir-muted,
+#cgs-imeno-right-shell .cgs-ir-caption{
+  color:#bcc8d7!important;font-size:11px!important;line-height:1.4!important;
+  margin:4px 0!important;
+}
+#cgs-imeno-right-shell .cgs-ir-warning{color:#ffd49b!important}
+#cgs-imeno-right-shell details.cgs-ir-detail{
+  margin:7px 0!important;padding:6px 8px!important;
+  border:1px solid #526070!important;border-radius:6px!important;
+}
+#cgs-imeno-right-shell summary{cursor:pointer!important;color:#c9e4ff!important}
+#cgs-imeno-right-shell .cgs-ir-folder{
+  margin:9px 0!important;padding:9px!important;
+  border:1px solid #586679!important;border-radius:8px!important;
+  background:#252d38!important;
+}
+#cgs-imeno-right-shell .cgs-ir-folder-choice{
+  display:flex!important;align-items:start!important;gap:8px!important;
+  color:#fff1c6!important;font-weight:650!important;overflow-wrap:anywhere!important;
+}
+#cgs-imeno-right-shell input[type="checkbox"]{
+  appearance:auto!important;width:17px!important;height:17px!important;
+  flex:0 0 17px!important;accent-color:#d3aa48!important;
+}
+#cgs-imeno-right-shell .cgs-ir-progress{display:block!important;width:100%!important}
+#cgs-imeno-right-shell .cgs-ir-note-label{
+  display:block!important;color:#e7edf5!important;font-weight:600!important;
+}
+#cgs-imeno-right-shell .cgs-ir-note{
+  display:block!important;width:100%!important;margin:6px 0 10px!important;
+  resize:vertical!important;min-height:52px!important;
+  color:#f4f7fb!important;background:#252e39!important;
+  border:1px solid #687a90!important;border-radius:7px!important;
+  padding:7px!important;font:12px system-ui,sans-serif!important;
+}
+#cgs-imeno-right-shell .cgs-ir-actions{
+  display:grid!important;grid-template-columns:1fr 1fr!important;
+  gap:6px!important;
+}
+#cgs-imeno-right-shell button.cgs-ir-dead_exclude,
+#cgs-imeno-right-shell button.cgs-ir-dead_handover,
+#cgs-imeno-right-shell button.cgs-ir-dead_close{
+  background:#66323b!important;border-color:#b96c75!important;
+}
+#cgs-imeno-right-shell button.cgs-ir-restore{
+  background:#205d51!important;border-color:#47af96!important;
+}
+
+/* Current-chat toolbar is docked in the right panel, never over message text. */
+#cgs-imeno-right-shell .cgs-ir-chat-actions{
+  padding:6px 8px!important;
+  border-bottom:1px solid #465262!important;
+  flex:0 0 auto!important;max-height:176px!important;overflow:auto!important;
+}
+#cgs-imeno-right-shell #cgs-status-actions{
+  position:relative!important;top:auto!important;right:auto!important;bottom:auto!important;
+  left:auto!important;width:100%!important;max-width:100%!important;
+  margin:0!important;padding:4px!important;z-index:auto!important;
+  display:flex!important;flex-direction:row!important;flex-wrap:wrap!important;
+  align-items:center!important;justify-content:flex-start!important;gap:4px!important;
+  border-radius:8px!important;background:#272e39!important;
+  box-shadow:none!important;
+}
+#cgs-imeno-right-shell #cgs-status-actions button.cgs-action{
+  flex:0 0 32px!important;min-width:32px!important;min-height:32px!important;
+  max-width:32px!important;max-height:32px!important;
+  width:32px!important;height:32px!important;position:relative!important;
+}
+#cgs-imeno-right-shell #cgs-status-actions .cgs-legend{
+  width:100%!important;max-width:100%!important;
+  font-size:10px!important;line-height:1.35!important;
+  white-space:normal!important;
+}
+#cgs-imeno-right-shell #cgs-status-actions .cgs-lifecycle-label{
+  color:#c9e4ff!important;
+}
+
+@media(max-width:580px){
+  #cgs-imeno-right-shell{top:58px!important;height:calc(100vh - 67px)!important;width:calc(100vw - 7px)!important}
+  #cgs-imeno-right-shell[data-collapsed="yes"]{
+    transform:translateX(calc(100% - 45px))!important;
+  }
+}

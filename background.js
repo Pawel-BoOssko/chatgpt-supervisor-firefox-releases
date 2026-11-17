@@ -18,8 +18,12 @@ async function jsonRequest(path, options = {}, timeoutMs = 8000) {
       signal: controller.signal,
     });
     const data = await res.json();
-    if (!res.ok || data.ok === false)
-      throw new Error((data && data.error) || "HTTP " + res.status);
+    if (!res.ok || data.ok === false){
+      const error=new Error((data && (data.error||data.status)) || "HTTP "+res.status);
+      error.http_status=res.status;
+      error.payload=data;
+      throw error;
+    }
     return data;
   } finally {
     clearTimeout(timeout);
@@ -171,10 +175,44 @@ async function updateProfile(action) {
   }catch(e){return {ok:false,error:String(e.message||e)};}
 }
 
+async function lifecycleGet(uuids) {
+  const ids=[...new Set((uuids||[]).filter(id=>UUID.test(id||"")).map(id=>id.toLowerCase()))];
+  if(!ids.length || ids.length>150)return {ok:false,error:"invalid_uuid_list"};
+  try {
+    return await jsonRequest("/api/lifecycle/status",{
+      method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({uuids:ids})
+    },9000);
+  }catch(e){return {ok:false,error:String(e.message||e)};}
+}
+
+async function lifecycleUpdate(action) {
+  if(!UUID.test(action?.uuid||""))return {ok:false,error:"invalid_uuid"};
+  if(!["active","temporary_unavailable","dead_manual","retired"].includes(action?.state))
+    return {ok:false,error:"invalid_lifecycle_state"};
+  const revision=action?.expected_revision;
+  if(!Number.isInteger(revision) || revision<0)return {ok:false,error:"invalid_revision"};
+  const data={uuid:action.uuid.toLowerCase(),state:action.state,expected_revision:revision};
+  if(action.archive==="requested")data.archive="requested";
+  try{
+    const result=await jsonRequest("/api/lifecycle/update",{
+      method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(data)
+    },10000);
+    profiles.delete(data.uuid);
+    statusCache=null;
+    return result;
+  }catch(e){return {ok:false,error:String(e.message||e)};}
+}
+
 async function observeBrowser(action) {
   const uuid=action && action.uuid;
   if(!UUID.test(uuid||"")) return {ok:false,error:"invalid_uuid"};
   const data={uuid:uuid.toLowerCase()};
+  if(typeof action.url==="string" && action.url.length<=2048)
+    data.url=action.url;
+  if(typeof action.source==="string")
+    data.source=action.source;
   if(typeof action.title==="string" && action.title.length<=240)
     data.title=action.title;
   if(typeof action.mcp_nick_declaration==="string" &&
@@ -186,6 +224,36 @@ async function observeBrowser(action) {
       body:JSON.stringify(data)
     },10000);
   }catch(e){return {ok:false,error:String(e.message||e)};}
+}
+
+async function getChatContext(uuid){
+  if(!UUID.test(uuid||""))return {ok:false,error:"invalid_uuid"};
+  try{
+    return await jsonRequest("/api/chat/context?uuid="+encodeURIComponent(uuid.toLowerCase()),{},10000);
+  }catch(e){return {ok:false,...(e.payload||{}),
+    error:String(e.message||e),http_status:e.http_status||null};}
+}
+
+async function triageChat(message){
+  if(!UUID.test(message?.uuid||""))return {ok:false,error:"invalid_uuid"};
+  if(!["temporary","dead_exclude","dead_handover","dead_close","restore"].includes(message?.action))
+    return {ok:false,error:"invalid_action"};
+  const payload={uuid:message.uuid.toLowerCase(),action:message.action,
+    expected_revision:message.expected_revision,
+    folders:message.folders||[],note:message.note||""};
+  try{
+    const result=await jsonRequest("/api/chat/triage",{
+      method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(payload)
+    },15000);
+    profiles.delete(payload.uuid);statusCache=null;
+    return result;
+  }catch(e){
+    return {ok:false,...(e.payload||{}),error:String(e.message||e),
+      http_status:e.http_status||null,
+      conflict:e.http_status===409||
+        /revision|successor|conflict/i.test(String(e.message||e))};
+  }
 }
 
 async function openNewChatTab(sender){
@@ -278,6 +346,14 @@ browser.runtime.onMessage.addListener((message,sender)=>{
     return getProfiles(message.uuids,!!message.force);
   if(message && message.type==="SUP_PROFILE_UPDATE")
     return updateProfile(message);
+  if(message && message.type==="SUP_CONTEXT_GET")
+    return getChatContext(message.uuid);
+  if(message && message.type==="SUP_TRIAGE")
+    return triageChat(message);
+  if(message && message.type==="SUP_LIFECYCLE_GET")
+    return lifecycleGet(message.uuids);
+  if(message && message.type==="SUP_LIFECYCLE_UPDATE")
+    return lifecycleUpdate(message);
   if(message && message.type==="SUP_BROWSER_OBSERVE")
     return observeBrowser(message);
   if(message && message.type==="SUP_OPEN_TABS")

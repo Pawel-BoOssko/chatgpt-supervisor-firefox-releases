@@ -42,10 +42,12 @@
         "build-info.js",
         "ui-model.js",
         "chat-index.js",
-        "content.js"
+        "content.js",
+        "right-panel.js"
       ],
       "css": [
-        "content.css"
+        "content.css",
+        "right-panel.css"
       ],
       "run_at": "document_idle"
     }
