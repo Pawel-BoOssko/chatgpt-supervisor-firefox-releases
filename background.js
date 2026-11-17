@@ -337,57 +337,58 @@ async function getBuildStatus(force=false){
   finally{updateStatusInflight=null;}
 }
 
-// Persistent presence registry on SATANAMD. No periodic HTTP polling in the
-// background: the 6-hour browser alarm only asks the elected visible tab
-// whether a full, account-scoped scan is due.
-let inventoryStatusCache=null,inventoryStatusAt=0,inventoryStatusKey="";
-async function getInventoryStatus(message={}){
-  const account=String(message.account_key||"");
-  const limit=Number(message.limit||0);
-  const key=account+"|"+limit;
-  if(limit===0&&inventoryStatusCache&&key===inventoryStatusKey&&
-     Date.now()-inventoryStatusAt<120000)return inventoryStatusCache;
+// The only durable registry is IMENO. Suppress duplicate browser observations
+// across tabs and reloads; do not poll titles or fetch a whole account index.
+const SIDEBAR_KNOWN_KEY="cgs_sidebar_observed_uuid_v044";
+let sidebarKnownPromise=null,sidebarQueue=Promise.resolve();
+function loadSidebarKnown(){
+  if(!sidebarKnownPromise){
+    sidebarKnownPromise=browser.storage.local.get(SIDEBAR_KNOWN_KEY)
+      .then(data=>new Set(Array.isArray(data?.[SIDEBAR_KNOWN_KEY])
+        ?data[SIDEBAR_KNOWN_KEY].filter(id=>UUID.test(id)).slice(-20000):[]))
+      .catch(()=>new Set());
+  }
+  return sidebarKnownPromise;
+}
+async function observeSidebarBatch(message){
+  const items=message?.items;
+  if(!Array.isArray(items)||items.length<1||items.length>150)
+    return {ok:false,error:"invalid_sidebar_batch"};
+  if(items.some(item=>!item||typeof item!=="object"||
+      !UUID.test(item.uuid||"")||item.source!=="sidebar_dom"))
+    return {ok:false,error:"invalid_sidebar_item"};
+  const known=await loadSidebarKnown();
+  const unique=new Map();
+  for(const item of items){
+    const id=item.uuid.toLowerCase();
+    if(known.has(id)||unique.has(id))continue;
+    const record={uuid:id,source:"sidebar_dom"};
+    if(typeof item.title==="string"&&item.title.trim())
+      record.title=item.title.trim().slice(0,240);
+    if(typeof item.url==="string")record.url=item.url;
+    unique.set(id,record);
+  }
+  if(!unique.size)return {ok:true,observed:0,skipped:true};
   try{
-    const qs=new URLSearchParams();
-    if(account)qs.set("account",account);
-    if(limit)qs.set("limit",String(limit));
-    const result=await jsonRequest("/api/inventory/status"+
-      (qs.size?"?"+qs:""),{},12000);
-    if(limit===0){inventoryStatusCache=result;inventoryStatusAt=Date.now();inventoryStatusKey=key;}
-    return result;
+    const result=await jsonRequest("/api/browser/observe-batch",{
+      method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({items:[...unique.values()]})
+    },15000);
+    if(result?.ok!==true)return result;
+    for(const id of unique.keys())known.add(id);
+    // Bounded persistent cache only. IMENO remains authoritative, and
+    // this is NOT a shadow database of conversation titles or content.
+    await browser.storage.local.set({
+      [SIDEBAR_KNOWN_KEY]:[...known].slice(-20000)
+    });
+    return {ok:true,observed:result.observed||unique.size};
   }catch(e){return {ok:false,error:String(e.message||e)};}
 }
-async function inventoryPost(action,message){
-  const endpoints={start:"start",page:"page",finish:"finish",abort:"abort"};
-  if(!endpoints[action])return {ok:false,error:"invalid_inventory_action"};
-  const data={...message};
-  delete data.type;
-  try{
-    const result=await jsonRequest("/api/inventory/"+action,{
-      method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify(data)},20000);
-    if(action==="finish"){inventoryStatusCache=null;inventoryStatusAt=0;}
-    return result;
-  }catch(e){
-    return {ok:false,error:String(e.message||e),http_status:e.http_status||null};
-  }
-}
-const INVENTORY_ALARM="cgs-chat-inventory-six-hours";
-if(browser.alarms?.create&&browser.alarms?.get){
-  try{
-    // The event page may restart frequently. Do not postpone the 6-hour alarm
-    // on every background wake-up; create it only if it does not exist.
-    void browser.alarms.get(INVENTORY_ALARM).then(existing=>{
-      if(!existing)return browser.alarms.create(
-        INVENTORY_ALARM,{periodInMinutes:360});
-    }).catch(()=>{});
-    browser.alarms.onAlarm.addListener(alarm=>{
-      if(alarm.name!==INVENTORY_ALARM)return;
-      const id=globalThis.CGS_COORDINATOR?.getOwner();
-      if(Number.isInteger(id))
-        browser.tabs.sendMessage(id,{type:"SUP_INVENTORY_CHECK"}).catch(()=>{});
-    });
-  }catch(e){console.warn("Inventory alarm unavailable:",String(e));}
+function enqueueSidebarBatch(message){
+  const work=()=>observeSidebarBatch(message);
+  const next=sidebarQueue.then(work,work);
+  sidebarQueue=next.catch(()=>{});
+  return next;
 }
 
 browser.runtime.onMessage.addListener((message,sender)=>{
@@ -397,16 +398,6 @@ browser.runtime.onMessage.addListener((message,sender)=>{
   if(message && message.type==="SUP_COORD_STATUS")
     return Promise.resolve({ok:true,ownerTabId:globalThis.CGS_COORDINATOR?.getOwner(),
       epoch:globalThis.CGS_COORDINATOR?.getEpoch()});
-  if(message && message.type==="SUP_INVENTORY_STATUS")
-    return getInventoryStatus(message);
-  if(message && message.type==="SUP_INVENTORY_START")
-    return inventoryPost("start",message);
-  if(message && message.type==="SUP_INVENTORY_PAGE")
-    return inventoryPost("page",message);
-  if(message && message.type==="SUP_INVENTORY_FINISH")
-    return inventoryPost("finish",message);
-  if(message && message.type==="SUP_INVENTORY_ABORT")
-    return inventoryPost("abort",message);
   if(message && message.type==="SUP_BUILD_STATUS")
     return getBuildStatus(!!message.force);
   if(message && message.type==="SUP_STATUS_GET")
@@ -423,6 +414,8 @@ browser.runtime.onMessage.addListener((message,sender)=>{
     return lifecycleGet(message.uuids);
   if(message && message.type==="SUP_LIFECYCLE_UPDATE")
     return lifecycleUpdate(message);
+  if(message && message.type==="SUP_BROWSER_OBSERVE_BATCH")
+    return enqueueSidebarBatch(message);
   if(message && message.type==="SUP_BROWSER_OBSERVE")
     return observeBrowser(message);
   if(message && message.type==="SUP_OPEN_TABS")

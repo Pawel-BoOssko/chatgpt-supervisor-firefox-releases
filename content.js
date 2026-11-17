@@ -451,9 +451,13 @@
     }
   }
   function filteredItems(){
-    const source=chatIndex?[...chatIndex.entries.values()]:
-      nativeSidebarRows().map(a=>({uuid:uuidForLink(a),
-        title:originalTitle(a),updated:0}));
+    // Never render off-screen account history. Only currently mounted
+    // ChatGPT sidebar rows are candidates.
+    const source=nativeSidebarRows().map(a=>{
+      const uuid=uuidForLink(a);
+      return {uuid,title:originalTitle(a),updated:chatIndex?.entries.get(uuid)?.updated||0,
+        project:chatIndex?.entries.get(uuid)?.project||""};
+    }).filter(item=>item.uuid);
     if(model)return model.sorted(source,profiles,states,modelFilters());
     const term=normalized(bulkFilter.trim());
     return source.filter(item=>normalized(item.title).includes(term)||
@@ -547,12 +551,13 @@
     container.replaceChildren(fragment);
   }
   function scheduleIndexLoad(force=false){
-    if(!chatIndex||!cgsTabActive())return;
+    if(!cgsTabActive())return;
     clearTimeout(filterSearchTimer);
     filterSearchTimer=setTimeout(()=>{
       filterSearchTimer=null;
       if(!cgsTabActive()||!filtersActive())return;
-      chatIndex.load(force).catch(()=>queueScan());
+      // Repaint current DOM only; no /backend-api/conversations requests.
+      applyBulkFilter();
     },250);
   }
   // The Supervisor sidecar is outside the native ChatGPT sidebar.
@@ -643,21 +648,14 @@
     }
     renderFilterResults();
     if(bulkPanel){
-      const state=chatIndex?.snapshot();
       const matches=active?filteredItems().length:shown;
       const summary=active
-        ? matches+" wyników · "+(state?.size||shown)+" w indeksie"+
-          (state?.loading?" · doczytuję…":state?.complete?" · pełny indeks":
-           state?.loaded?" · indeks częściowy":" · lista widoczna")
-        : shown+" widocznych";
+        ? matches+" pasujących w aktualnym menu ChatGPT"
+        : shown+" dostępnych w menu ChatGPT";
       bulkPanel.querySelector(".cgs-bulk-counter").textContent=
         bulkSelected.size+" zaznaczonych · "+summary;
       const notice=bulkPanel.querySelector(".cgs-index-warning");
-      if(notice){
-        notice.textContent=active && state?.error
-          ?"Niepełny indeks: "+state.error:"";
-        notice.hidden=!notice.textContent;
-      }
+      if(notice){notice.textContent="";notice.hidden=true;}
     }
   }
   const trackedSidebarLinks=new Map();
@@ -1059,66 +1057,7 @@
     button("Otwórz karty",bulkOpenTabs);
     button("Archiwizuj",bulkArchive);
     button("↻ Dodaj do wybudzania",bulkWake);
-    button("Odśwież listę",()=>scheduleIndexLoad(true));
-    // Suspected absence is inferred from a FULL inventory, never 180 sidebar links.
-    button("Prawdopodobnie usunięte",async()=>{
-      const result=await browser.runtime.sendMessage({
-        type:"SUP_INVENTORY_STATUS",limit:100
-      });
-      if(!result?.ok){
-        bulkNotice("Inwentaryzacja: "+(result?.error||"brak danych"),true);
-        return;
-      }
-      const count=Number(result.probably_deleted||0);
-      bulkNotice("Rejestr: "+Number(result.total||0)+" rozmów; "+count+
-        " prawdopodobnie usuniętych. Ostatni pełny przegląd: "+
-        (result.last_completed_at||"jeszcze nie wykonano"));
-      let box=panel.querySelector(".cgs-inventory-suspects");
-      if(!box){
-        box=document.createElement("div");
-        box.className="cgs-inventory-suspects";
-        box.setAttribute("role","region");
-        box.setAttribute("aria-label","Czaty prawdopodobnie usunięte");
-        panel.append(box);
-      }
-      const title=document.createElement("strong");
-      title.textContent="Prawdopodobnie usunięte: "+count;
-      const note=document.createElement("div");
-      note.textContent="Rekordy pozostają w bazie. Brak w indeksie może również oznaczać archiwizację.";
-      box.replaceChildren(title,note);
-      for(const row of (result.suspects||[]).slice(0,40)){
-        const line=document.createElement("div");
-        line.className="cgs-inventory-suspect-row";
-        const link=document.createElement("a");
-        link.href="/c/"+row.uuid;
-        link.textContent=row.title||row.uuid;
-        link.title=row.uuid;
-        const meta=document.createElement("small");
-        meta.textContent=" · ostatnio: "+(row.last_seen_at||"?")+
-          " · brak w "+row.missing_count+" przeglądach";
-        line.append(link,meta);box.append(line);
-      }
-      if(count>40){
-        const more=document.createElement("div");
-        more.textContent="Pokazano 40 z "+count+". Pełna ewidencja pozostaje w bazie.";
-        box.append(more);
-      }
-    });
-    button("Pełny przegląd historii",async()=>{
-      const controller=globalThis.CGS_INVENTORY_CONTROL;
-      if(!controller?.runNow){
-        bulkNotice("Moduł inwentaryzacji jest niedostępny.",true);return;
-      }
-      bulkNotice("Trwa pełna inwentaryzacja rozmów. Nie usuwam rekordów.");
-      const result=await controller.runNow();
-      bulkNotice(result?.ok
-        ?("Przegląd: "+(result.total||0)+" rozmów; "+
-          (result.probably_deleted||0)+" prawdopodobnie usuniętych; "+
-          (result.restored||0)+" przywróconych.")
-        :("Przegląd nieukończony: "+(result?.error||"brak danych")+
-          ". Bez zmiany oznaczeń."),
-        !result?.ok);
-    });
+    button("Odśwież widok",()=>{queueScan();applyBulkFilter();});
     panel.append(actions);
     const projectRow=document.createElement("div");
     projectRow.className="cgs-project-row";
@@ -1259,6 +1198,38 @@
     if(reapplyFilters)applyBulkFilter();
     updateToolbar();
   }
+  const sentSidebarIds=new Set(),pendingSidebarIds=new Set();
+  function observeSidebarRows(){
+    if(!cgsTabActive())return;
+    const items=[];
+    for(const [id,link] of trackedSidebarLinks){
+      if(sentSidebarIds.has(id)||pendingSidebarIds.has(id)||!link.isConnected)continue;
+      const href=link.getAttribute("href")||"";
+      let safeUrl=null;
+      try{
+        const u=new URL(href,location.origin);
+        if(u.origin==="https://chatgpt.com" &&
+           /^\/(?:c\/[a-f0-9-]{36}|g\/g-p-[a-f0-9]{32}(?:-[^/]+)?\/c\/[a-f0-9-]{36})\/?$/i.test(u.pathname) &&
+           !u.search&&!u.hash)
+          safeUrl=u.origin+u.pathname.replace(/\/$/,"");
+      }catch(_){}
+      const title=originalTitle(link);
+      items.push({uuid:id,source:"sidebar_dom",
+        ...(title?{title:title.slice(0,240)}:{}),
+        ...(safeUrl?{url:safeUrl}:{})});
+      pendingSidebarIds.add(id);
+    }
+    for(let i=0;i<items.length;i+=100){
+      const batch=items.slice(i,i+100);
+      void browser.runtime.sendMessage({
+        type:"SUP_BROWSER_OBSERVE_BATCH",items:batch
+      }).then(response=>{
+        if(response?.ok)for(const item of batch)sentSidebarIds.add(item.uuid);
+      }).catch(()=>{}).finally(()=>{
+        for(const item of batch)pendingSidebarIds.delete(item.uuid);
+      });
+    }
+  }
   function scan() {
     if(!cgsTabActive())return;
     trackedSidebarLinks.clear();
@@ -1272,6 +1243,7 @@
     }
     applyBulkFilter();
     updateToolbar();
+    observeSidebarRows();
     // Only paint already known data; a sidebar DOM change does not
     // authorize a background fetch for unrelated conversation profiles.
   }

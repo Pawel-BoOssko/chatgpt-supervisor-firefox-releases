@@ -17,8 +17,7 @@
   },
   "permissions": [
     "storage",
-    "tabs",
-    "alarms"
+    "tabs"
   ],
   "host_permissions": [
     "http://127.0.0.1/*",
@@ -44,11 +43,9 @@
         "build-info.js",
         "ui-model.js",
         "chat-index.js",
-        "inventory-scan.js",
         "coordinator-client.js",
         "content.js",
-        "right-panel.js",
-        "inventory-controller.js"
+        "right-panel.js"
       ],
       "css": [
         "content.css",
