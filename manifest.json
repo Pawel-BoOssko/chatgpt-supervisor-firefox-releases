@@ -44,6 +44,7 @@
         "ui-model.js",
         "chat-index.js",
         "coordinator-client.js",
+        "dom-cleaner.js",
         "content.js",
         "right-panel.js"
       ],

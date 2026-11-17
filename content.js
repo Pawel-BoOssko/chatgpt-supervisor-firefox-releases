@@ -1425,6 +1425,35 @@
     if(imeno===profile.imeno)return;
     saveProfileField("imeno",imeno);
   }
+  function cleanConversationDom(){
+    const cleaner=globalThis.CGS_DOM_CLEANER;
+    if(!cleaner?.clean){
+      toast("Moduł czyszczenia DOM jest niedostępny.",true);
+      return;
+    }
+    const result=cleaner.clean();
+    if(!result?.ok){
+      const reasons={
+        not_conversation:"Otwórz konkretną rozmowę ChatGPT.",
+        main_missing:"Nie znaleziono głównej części rozmowy.",
+        composer_missing:"Nie znaleziono edytora wiadomości.",
+        generation_active:"Trwa generowanie odpowiedzi — nie czyszczę DOM.",
+        inactive_tab:"Karta nie jest aktualnie aktywna.",
+        already_running:"Czyszczenie DOM już trwa.",
+        invalid_keep_last:"Nieprawidłowa liczba zachowanych wiadomości.",
+        cleanup_failed:"Nie udało się wyczyścić DOM."
+      };
+      toast(reasons[result?.reason]||"Nie udało się wyczyścić DOM.",true);
+      return;
+    }
+    if(result.skipped){
+      toast("DOM: za krótka rozmowa ("+result.kept+
+        " wiadomości). Zachowuję ostatnie 80.",false);
+      return;
+    }
+    toast("DOM: usunięto "+result.removed+" starszych wiadomości ("+
+      result.elementsRemoved+" elementów). Przeładowanie przywraca widok.",false);
+  }
   function insertJoinPrompt() {
     const editor = composer();
     if (!editor) {toast("Nie znaleziono pola wpisywania wiadomości.",true);return;}
@@ -1529,7 +1558,8 @@
       {id:"important",text:"☆",title:"Oznacz czat jako ważny",callback:toggleImportance},
       {id:"wake",text:"↻",title:"Dodaj do wybudzania (zgłoszenie do Pozór Nadzór)",callback:enqueueOneWake},
       {id:"imeno",text:"✎",title:"Ustaw imeno",callback:editImeno},
-      {id:"archive",text:"▣",title:"Archiwizuj rozmowę w ChatGPT",callback:archiveViaChatGPT}
+      {id:"archive",text:"▣",title:"Archiwizuj rozmowę w ChatGPT",callback:archiveViaChatGPT},
+      {id:"clean-dom",text:"DOM",title:"Wyczyść DOM rozmowy — zostaw ostatnie 80 wiadomości. Przeładowanie przywraca cały widok.",callback:cleanConversationDom}
     ];
     for(const action of actions){
       const b=document.createElement("button");
@@ -1792,6 +1822,7 @@
     const wake=toolbar.querySelector(".cgs-action-wake");
     const star=toolbar.querySelector(".cgs-action-important");
     const edit=toolbar.querySelector(".cgs-action-imeno");
+    const cleanDom=toolbar.querySelector(".cgs-action-clean-dom");
     const profile=profiles[id];
     const disposition=lifecycleByUuid[id]?.lifecycle_state||"active";
     const disabledState=["dead_manual","temporary_unavailable","missing_reported","deleted_verified"].includes(disposition);
@@ -1815,6 +1846,7 @@
     wake.disabled=busy || disabledState;
     star.disabled=busy || !profile;
     edit.disabled=busy || !profile;
+    if(cleanDom)cleanDom.disabled=busy;
     const important=profile && profile.important===1;
     star.textContent=important?"★":"☆";
     star.setAttribute("aria-pressed",important?"true":"false");

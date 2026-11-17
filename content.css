@@ -633,3 +633,26 @@ a.cgs-status-link.cgs-important{
 }
 #cgs-status-actions .cgs-lifecycle-label[data-state="dead_manual"]{color:#ff939f!important;}
 #cgs-status-actions .cgs-lifecycle-label[data-state="temporary_unavailable"]{color:#ffdc8a!important;}
+
+/* Manual, local-only long-chat DOM cleanup (LongChat Thinner principle).
+   No background timers or DOM observers are introduced by this feature. */
+#cgs-status-actions button.cgs-action-clean-dom {
+  flex: 0 0 44px !important;
+  width: 44px !important;
+  min-width: 44px !important;
+  max-width: 44px !important;
+  border-radius: 16px !important;
+  background: #27628f !important;
+  color: #fff !important;
+  font: 800 11px/1 system-ui, sans-serif !important;
+}
+main [data-cgs-dom-cleaner-marker="1"] {
+  padding: 7px 12px !important;
+  margin: 10px auto !important;
+  max-width: 740px !important;
+  border: 1px solid rgba(125,145,165,.5) !important;
+  border-radius: 8px !important;
+  color: inherit !important;
+  font: 12px/1.4 system-ui, sans-serif !important;
+  opacity: .8 !important;
+}
