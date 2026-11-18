@@ -7,6 +7,10 @@
 
   if (globalThis.__cgsStatusPanelStarted) return;
   globalThis.__cgsStatusPanelStarted = true;
+  const trace=(route,event,attrs={})=>
+    globalThis.CGS_TRACE?.emit?.(route,event,attrs);
+  trace("S00","TAB_SEEN",{phase:"content_initialized",
+    safe_values:{source:"chatgpt.com"}});
 
   const UUID_PATH = /^\/c\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})(?:\/|$)/i;
   const UUID_LINK = /\/c\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})(?:\/|$)/i;
@@ -202,9 +206,12 @@
     return ids;
   }
   async function refreshProfiles(force=false,{includeSidebar=false}={}) {
-    if (!cgsTabActive()||profileLoadRunning)return;
+    if (!cgsTabActive()||profileLoadRunning){
+      trace("S22","NOT_ATTEMPTED",{reason_code:!cgsTabActive()?"tab_not_owner":"profile_load_busy"});
+      return;
+    }
     const ids=currentVisibleIds({includeSidebar});
-    if(!ids.length)return;
+    if(!ids.length){trace("S07","RENDER_EMPTY",{reason_code:"no_requested_uuids"});return;}
     const signature=ids.join(",");
     // A cached profile is reused for 30 min; even failed attempts are
     // throttled. Sidebar-wide reads require an explicit filter or refresh.
@@ -215,8 +222,15 @@
     profileLoadRunning=true;
     const requestEpoch=visibilityEpoch;
     try {
+      trace("S07","REQUEST_START",{requested_count:ids.length,
+        chat_uuid:ids[0],phase:"content_to_background",
+        safe_values:{source:includeSidebar?"sidebar_and_current":"current_only"}});
       const data=await browser.runtime.sendMessage({
         type:"SUP_PROFILE_GET",uuids:ids,force:!!force});
+      trace("S07","REQUEST_END",{requested_count:ids.length,
+        received_count:Array.isArray(data?.items)?data.items.length:0,
+        success:data?.ok===true,
+        reason_code:data?.ok===true?"profiles_received":"profiles_error"});
       // Never apply late responses in an inactive tab or in a later activation.
       if(!cgsTabActive()||requestEpoch!==visibilityEpoch)return;
       if (data && Array.isArray(data.items)) {
@@ -231,6 +245,7 @@
       }else{
         profilesConnected=false;
         profilesError="Niepoprawna odpowiedź serwera profili";
+        trace("S07","API_ERROR",{reason_code:"profile_response_shape",success:false});
       }
     }catch(e){
       if(cgsTabActive()&&requestEpoch===visibilityEpoch){
@@ -268,6 +283,10 @@
         found.add("MCP_NICK:@@@"+match[1].toUpperCase()+"@@@");
       }
     }
+    trace("S04",found.size===1?"NICK_FOUND":found.size>1?"NICK_AMBIGUOUS":"NICK_NOT_FOUND",{
+      requested_count:assistantMessages.length,received_count:found.size,
+      safe_values:found.size===1?{mcp_nick:[...found][0]}:{reason:found.size>1?"multiple_declarations":"no_matching_declaration"},
+      phase:"assistant_message_dom"});
     return found.size===1 ? [...found][0] : null;
   }
   async function observeCurrentChat() {
@@ -289,7 +308,14 @@
       (document.body?.innerText||"").slice(0,2400)))title="";
     const declaration=ownMcpNickFromAssistant();
     const signature=uuid+"|"+title+"|"+(declaration||"")+"|"+location.pathname;
-    if(signature===observationLastSuccess && now-observationLastAt<300000)return;
+    if(signature===observationLastSuccess && now-observationLastAt<300000){
+      trace("S05","DEDUPE_SKIP",{reason_code:"same_signature_recent"});return;
+    }
+    trace("S05","REPORT_PREPARED",{chat_uuid:uuid,
+      chat_title:title||undefined,
+      payload_fields:["uuid","title","url","source",...(declaration?["mcp_nick_declaration"]:[])],
+      safe_values:{uuid,ui_name:title||"",...(declaration?{mcp_nick:declaration}:{})},
+      phase:"browser_to_imeno_report"});
     try{
       const result=await browser.runtime.sendMessage({
         type:"SUP_BROWSER_OBSERVE",uuid,
@@ -297,11 +323,17 @@
         source:"current_chat",
         ...(declaration?{mcp_nick_declaration:declaration}:{})
       });
+      trace("S05",result?.ok?"API_ACCEPTED":"API_REJECTED",{
+        chat_uuid:uuid,success:!!result?.ok,
+        received_count:result?.observed,
+        reason_code:result?.ok?"imeno_observation_accepted":"imeno_observation_not_accepted"});
       if(result && result.ok){
         observationLastSuccess=signature;
         observationLastAt=now;
       }
-    }catch(e){}
+    }catch(e){trace("S05","API_ERROR",{
+      chat_uuid:uuid,success:false,error_type:e?.name||"Error",
+      reason_code:"report_exception"});}
   }
   function currentUuid() {
     const m = UUID_LINK.exec(location.pathname);
@@ -714,6 +746,10 @@
       row.textContent=x.time+" · "+x.event+" · "+x.action+" · "+x.detail;
       return row;
     }));
+    trace("S19","WRITE_AUDIT",{operation:action,
+      phase:event,requested_count:entry.uuids.length,
+      chat_uuid:entry.uuids[0]||undefined,
+      reason_code:"user_action_reported"});
     browser.runtime.sendMessage({type:"SUP_LOG_EVENT",...entry}).catch(()=>{});
   }
   function bulkNotice(message,error=false){
@@ -1188,6 +1224,13 @@
     a.dataset.cgsLabel=cls.label+" | "+activity.info+
       (important?" | wa?ny":"")+
       (profile?.imeno?" | imeno: "+profile.imeno:"");
+    trace("S13","RENDER_VISIBLE",{chat_uuid:id,
+      chat_title:originalTitle(a)||undefined,
+      displayed_count:1,phase:"sidebar_row_painted",
+      safe_values:{uuid:id,ui_name:originalTitle(a)||"",
+        imeno:profile?.imeno||"",
+        status:item?.status||"BRAK_W_BAZIE",
+        color:cls.color}});
   }
   function repaintTrackedRows(reapplyFilters=false){
     if(!cgsTabActive())return;
@@ -1221,11 +1264,20 @@
     }
     for(let i=0;i<items.length;i+=100){
       const batch=items.slice(i,i+100);
+      trace("S03","REPORT_PREPARED",{sent_count:batch.length,
+        chat_uuid:batch[0]?.uuid,
+        payload_fields:["uuid","source","title","url"],
+        phase:"sidebar_to_imeno_batch"});
       void browser.runtime.sendMessage({
         type:"SUP_BROWSER_OBSERVE_BATCH",items:batch
       }).then(response=>{
+        trace("S03",response?.ok?"API_ACCEPTED":"API_REJECTED",{
+          sent_count:batch.length,received_count:response?.observed||0,
+          success:!!response?.ok,
+          reason_code:response?.skipped?"deduplicated":response?.ok?"imeno_accepted":"imeno_rejected"});
         if(response?.ok)for(const item of batch)sentSidebarIds.add(item.uuid);
-      }).catch(()=>{}).finally(()=>{
+      }).catch(()=>{trace("S03","API_ERROR",{
+        sent_count:batch.length,success:false,reason_code:"batch_send_failed"});}).finally(()=>{
         for(const item of batch)pendingSidebarIds.delete(item.uuid);
       });
     }
@@ -1243,6 +1295,11 @@
     }
     applyBulkFilter();
     updateToolbar();
+    trace("S13",trackedSidebarLinks.size?"RENDER_ATTEMPT":"RENDER_EMPTY",{
+      requested_count:trackedSidebarLinks.size,
+      displayed_count:[...trackedSidebarLinks.values()].filter(a=>a.isConnected&&a.getClientRects().length>0).length,
+      reason_code:trackedSidebarLinks.size?"native_sidebar_scanned":"no_native_sidebar_rows",
+      phase:"sidebar_scan"});
     observeSidebarRows();
     // Only paint already known data; a sidebar DOM change does not
     // authorize a background fetch for unrelated conversation profiles.
@@ -1333,13 +1390,23 @@
     value.textContent=statusSummary+" | "+profileSummary;
     root.dataset.connected=connected?"yes":statusLoaded?"no":"pending";
     root.title=value.textContent;
+    trace("S14","RENDER_VISIBLE",{
+      displayed_count:connected?Object.keys(states).length:0,
+      requested_count:Object.keys(profiles).length,
+      success:connected||profilesConnected,
+      reason_code:connected?"status_data_displayed":statusLoaded?"status_error_displayed":"status_pending",
+      phase:"health_label"});
   }
   async function refresh(force) {
     if (!cgsTabActive()||loadRunning) return;
     loadRunning = true;
     const requestEpoch=visibilityEpoch;
     try {
+      trace("S11","REQUEST_START",{phase:"content_to_background",
+        safe_values:{source:"Nadzor_SQLite"}});
       const data = await browser.runtime.sendMessage({type:"SUP_STATUS_GET",force:!!force});
+      trace("S11","REQUEST_END",{received_count:data?.states?Object.keys(data.states).length:0,
+        success:data?.connected===true,reason_code:data?.connected?"status_received":"status_error_or_stale"});
       if(!cgsTabActive()||requestEpoch!==visibilityEpoch)return;
       if (data && data.states && typeof data.states === "object") {
         states = data.states;
@@ -1866,6 +1933,10 @@
     makeToolbar();
     if(location.pathname!==lastPath){
       lastPath=location.pathname;
+      trace("S02","NAVIGATE",{chat_uuid:currentUuid()||undefined,
+        chat_url:location.origin+location.pathname,
+        phase:"chatgpt_spa_navigation",
+        reason_code:currentUuid()?"uuid_from_url":"no_uuid_in_route"});
       queueScan();
       refreshProfiles(false);
       observeCurrentChat();
@@ -1936,12 +2007,19 @@
     if(filtersActive())scheduleIndexLoad(false);
   }
   let ownerUiActive=false;
+  let ownerSince=0;
   function syncOwnerActivity(){
     const next=cgsTabActive();
     document.documentElement.classList.toggle("cgs-coordinator-parked",!next);
     // visibilitychange and coordinator-active can both report one transition.
     if(next===ownerUiActive)return;
     ownerUiActive=next;
+    const now=Date.now();
+    trace("S01",next?"TAB_OWNER_ON":"TAB_OWNER_OFF",{
+      chat_uuid:currentUuid()||undefined,active_ms:next?0:Math.max(0,now-ownerSince),
+      phase:next?"tab_becomes_owner":"tab_parked",
+      reason_code:next?"coordinator_selected":"coordinator_or_visibility_changed"});
+    ownerSince=next?now:0;
     if(next)activateVisibleUI();
     else suspendInvisibleUI();
   }

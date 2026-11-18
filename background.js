@@ -9,7 +9,49 @@ let statusInflight = null;
 const profiles = new Map();
 let profilesInflight = null;
 
+const TRACE_API_ROUTES={
+  "/api/status":"S11",
+  "/api/imeno":"S07",
+  "/api/profile/resolve":"S07",
+  "/api/profile/update":"S15",
+  "/api/chat/context":"S08",
+  "/api/lifecycle/status":"S09",
+  "/api/lifecycle/update":"S16",
+  "/api/chat/triage":"S16",
+  "/api/browser/observe-batch":"S03",
+  "/api/browser/observe":"S05",
+  "/api/wake/request":"S17",
+  "/api/leave":"S17",
+  "/api/event":"S19",
+  "/api/feedback":"S19",
+};
+function traceApi(route,event,attrs={}){
+  globalThis.CGS_TRACE?.emit?.(route,event,attrs);
+}
+function traceBodyInfo(options){
+  let body=null;
+  try{body=options?.body?JSON.parse(options.body):null;}catch(_){}
+  const ids=Array.isArray(body?.uuids)?body.uuids:
+    Array.isArray(body?.items)?body.items.map(x=>x.uuid):[];
+  const uid=body?.uuid||ids[0]||null;
+  return {chat_uuid:uid||undefined,
+    payload_fields:body&&typeof body==="object"?Object.keys(body).slice(0,25):[],
+    requested_count:ids.length||Number(!!uid),
+    safe_values:body?.mcp_nick_declaration?{
+      mcp_nick:body.mcp_nick_declaration.slice(0,90)}:undefined};
+}
 async function jsonRequest(path, options = {}, timeoutMs = 8000) {
+  const routePath=path.split("?")[0];
+  const route=TRACE_API_ROUTES[routePath]||"S21";
+  const traceId=globalThis.CGS_TRACE?.newId?.();
+  const start=Date.now();
+  const method=options?.method||"GET";
+  const info=traceBodyInfo(options);
+  traceApi(route,"REQUEST_START",{
+    ...info,trace_id:traceId,operation:method+" "+routePath,
+    phase:"browser_to_bridge",source_system:"firefox_background",
+    target_system:"SupervisorStatusBridge"
+  });
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -18,6 +60,19 @@ async function jsonRequest(path, options = {}, timeoutMs = 8000) {
       signal: controller.signal,
     });
     const data = await res.json();
+    const count=Array.isArray(data?.items)?data.items.length:
+      Array.isArray(data?.profiles)?data.profiles.length:
+      data?.states&&typeof data.states==="object"?Object.keys(data.states).length:
+      typeof data?.observed==="number"?data.observed:undefined;
+    traceApi(route,"REQUEST_END",{
+      ...info,trace_id:traceId,operation:method+" "+routePath,
+      phase:"bridge_to_browser",source_system:"SupervisorStatusBridge",
+      target_system:"firefox_background",http_status:res.status,
+      elapsed_ms:Date.now()-start,received_count:count,
+      success:res.ok&&data?.ok!==false,
+      reason_code:res.ok&&data?.ok!==false?"api_response_ok":"api_response_error",
+      safe_values:data?.status?{status:String(data.status).slice(0,80)}:undefined
+    });
     if (!res.ok || data.ok === false){
       const error=new Error((data && (data.error||data.status)) || "HTTP "+res.status);
       error.http_status=res.status;
@@ -25,7 +80,15 @@ async function jsonRequest(path, options = {}, timeoutMs = 8000) {
       throw error;
     }
     return data;
-  } finally {
+  }catch(error){
+    traceApi(route,"API_ERROR",{
+      ...info,trace_id:traceId,operation:method+" "+routePath,
+      phase:"browser_to_bridge",elapsed_ms:Date.now()-start,
+      error_type:error?.name||"Error",success:false,
+      reason_code:error?.name==="AbortError"?"timeout":"network_or_http_error"
+    });
+    throw error;
+  }finally {
     clearTimeout(timeout);
   }
 }
@@ -42,8 +105,11 @@ async function rememberStatusError(error){
   }catch(_){}
 }
 async function getStatus(force = false) {
-  if (!force && statusCache && Date.now() - statusFetchedAt < 300000)
+  if (!force && statusCache && Date.now() - statusFetchedAt < 300000){
+    traceApi("S11","CACHE_HIT",{reason_code:"nadzor_status_fresh",
+      received_count:Object.keys(statusCache.states||{}).length});
     return statusCache;
+  }
   if (statusInflight) return statusInflight;
   statusInflight = (async () => {
     try {
@@ -75,6 +141,9 @@ async function getProfiles(uuids, force = false) {
   const age = Date.now();
   const missing = ids.filter(id => force || !profiles.has(id) ||
                                   age - profiles.get(id).at > 1800000);
+  traceApi("S07",missing.length?"REQUEST_START":"CACHE_HIT",{
+    requested_count:ids.length,received_count:ids.length-missing.length,
+    reason_code:missing.length?"profiles_require_fetch":"all_profiles_cached"});
   if (missing.length) {
     if (profilesInflight) await profilesInflight;
     else {
@@ -306,8 +375,11 @@ function compareVersions(a,b){
 async function getBuildStatus(force=false){
   const installed=browser.runtime.getManifest().version;
   const build=globalThis.CGS_BUILD_INFO||{};
-  if(!force && updateStatusCache && Date.now()-updateStatusAt<900000)
+  if(!force && updateStatusCache && Date.now()-updateStatusAt<900000){
+    traceApi("S20","CACHE_HIT",{reason_code:"manifest_cache_fresh",
+      safe_values:{source:"GitHub_update_manifest"}});
     return updateStatusCache;
+  }
   if(updateStatusInflight)return updateStatusInflight;
   updateStatusInflight=(async()=>{
     let result={ok:false,installed,build,latest:null,upToDate:null};
@@ -315,6 +387,8 @@ async function getBuildStatus(force=false){
       const controller=new AbortController();
       const timeout=setTimeout(()=>controller.abort(),7000);
       let response;
+      traceApi("S20","REQUEST_START",{operation:"GET updates.json",
+        source_system:"firefox_background",target_system:"GitHub_release_manifest"});
       try{response=await fetch(UPDATE_MANIFEST,{
         cache:"no-store",signal:controller.signal
       });}finally{clearTimeout(timeout);}
@@ -329,7 +403,12 @@ async function getBuildStatus(force=false){
       const comparison=compareVersions(installed,latest);
       result={ok:comparison!==null,installed,build,latest,
         upToDate:comparison===null?null:comparison>=0};
-    }catch(e){result.error=String(e.message||e);}
+      traceApi("S20","REQUEST_END",{success:result.ok,
+        safe_values:{source:"GitHub",status:latest},reason_code:"manifest_fetched"});
+    }catch(e){result.error=String(e.message||e);
+      traceApi("S20","API_ERROR",{success:false,error_type:e?.name||"Error",
+        reason_code:"update_manifest_unavailable"});
+    }
     updateStatusCache=result;updateStatusAt=Date.now();
     return result;
   })();
@@ -368,7 +447,11 @@ async function observeSidebarBatch(message){
     if(typeof item.url==="string")record.url=item.url;
     unique.set(id,record);
   }
-  if(!unique.size)return {ok:true,observed:0,skipped:true};
+  if(!unique.size){
+    traceApi("S03","DEDUPE_SKIP",{reason_code:"sidebar_uuid_already_reported",
+      skipped_count:items.length});
+    return {ok:true,observed:0,skipped:true};
+  }
   try{
     const result=await jsonRequest("/api/browser/observe-batch",{
       method:"POST",headers:{"Content-Type":"application/json"},
@@ -391,7 +474,40 @@ function enqueueSidebarBatch(message){
   return next;
 }
 
+function receivePageTrace(message,sender){
+  const trace=message?.trace;
+  if(!trace||typeof trace!=="object"||
+     sender?.url&&!sender.url.startsWith("https://chatgpt.com/"))
+    return {ok:false,error:"invalid_trace_sender"};
+  const tab=sender?.tab;
+  const source=trace.source_system||"chatgpt_dom";
+  const data={...trace,tab_id:tab?.id,window_id:tab?.windowId,
+    source_system:source};
+  // The server checks every field and refuses unsupported payload content.
+  globalThis.CGS_TRACE_SINK?.(data);
+  return {ok:true,queued:true};
+}
+try{
+  browser.tabs.onActivated.addListener(({tabId,windowId})=>{
+    traceApi("S01","TAB_FOCUS",{tab_id:tabId,window_id:windowId,
+      phase:"active_tab_selected"});
+  });
+  browser.tabs.onUpdated.addListener((tabId,changes,tab)=>{
+    if(!/^https:\/\/chatgpt\.com(?:\/|$)/.test(tab?.url||""))return;
+    if(!changes.url && !changes.title && changes.status!=="complete")return;
+    traceApi("S02","TAB_SEEN",{tab_id:tabId,window_id:tab?.windowId,
+      chat_url:(tab.url||"").split(/[?#]/)[0],
+      phase:"tab_updated",safe_values:{
+        source:changes.url?"navigation":changes.title?"title_change":"completed"}});
+  });
+  browser.tabs.onRemoved.addListener((tabId,{windowId})=>{
+    traceApi("S01","TAB_END",{tab_id:tabId,window_id:windowId,
+      phase:"closed"});
+  });
+}catch(_){}
 browser.runtime.onMessage.addListener((message,sender)=>{
+  if(message && message.type==="SUP_TRACE")
+    return Promise.resolve(receivePageTrace(message,sender));
   if(message && message.type==="SUP_COORD_REGISTER")
     return globalThis.CGS_COORDINATOR?.register(sender)
       ||Promise.resolve({ok:false,active:false});

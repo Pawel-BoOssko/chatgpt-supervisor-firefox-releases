@@ -2,7 +2,7 @@ name: Sign and publish Firefox extension
 on:
   push:
     branches: [main, autosync/SATANAMD-firefox-status]
-    paths: [manifest.json, background.js, coordinator-background.js, build-info.js, chat-index.js, ui-model.js, coordinator-client.js, dom-cleaner.js, content.js, content.css, right-panel.js, right-panel.css, popup.html, popup.js, .github/workflows/sign-and-publish.yml]
+    paths: [manifest.json, background.js, coordinator-background.js, build-info.js, chat-index.js, ui-model.js, coordinator-client.js, trace-client.js, dom-cleaner.js, content.js, content.css, right-panel.js, right-panel.css, popup.html, popup.js, .github/workflows/sign-and-publish.yml]
   workflow_dispatch:
 permissions:
   contents: write
@@ -34,7 +34,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p bundle signed
-          cp source/{manifest.json,background.js,coordinator-background.js,build-info.js,chat-index.js,ui-model.js,coordinator-client.js,dom-cleaner.js,content.js,content.css,right-panel.js,right-panel.css,popup.html,popup.js} bundle/
+          cp source/{manifest.json,background.js,coordinator-background.js,build-info.js,chat-index.js,ui-model.js,coordinator-client.js,trace-client.js,dom-cleaner.js,content.js,content.css,right-panel.js,right-panel.css,popup.html,popup.js} bundle/
           echo "ADDON_VERSION=0.5.$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
           python3 - <<'PY'
           import json,os,pathlib

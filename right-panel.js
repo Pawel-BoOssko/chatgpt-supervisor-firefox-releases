@@ -7,6 +7,8 @@
 
   if(globalThis.__cgsImenoRightPanelStarted)return;
   globalThis.__cgsImenoRightPanelStarted=true;
+  const trace=(route,event,attrs={})=>
+    globalThis.CGS_TRACE?.emit?.(route,event,attrs);
   const UUID_ROUTE=/\/c\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})(?:\/|$)/i;
   const ACTIONS=[
     ["temporary","Czasowo niedostępny"],
@@ -262,6 +264,8 @@
     body.replaceChildren();
     if(!activeUuid)return;
     if(!context){
+      trace("S14","RENDER_EMPTY",{chat_uuid:activeUuid,
+        reason_code:"no_imeno_context_for_current_chat",phase:"right_panel"});
       body.append(node("p","cgs-ir-muted",
         "Dane Imeno nie zostały pobrane. UUID poniżej pochodzi z adresu ChatGPT, a nie z potwierdzonego odczytu Imeno."));
       line(body,"UUID z adresu",activeUuid);
@@ -271,6 +275,24 @@
     renderOverview(c);
     renderFolders(c);
     renderTriage(c);
+    const visible=!!shell && !shell.hidden && open;
+    trace("S14",visible?"RENDER_VISIBLE":"RENDER_HIDDEN",{
+      chat_uuid:activeUuid,received_count:Array.isArray(c.identities)?c.identities.length:0,
+      displayed_count:visible?Array.isArray(c.identities)?c.identities.length:0:0,
+      phase:"right_panel",reason_code:visible?"context_displayed":"panel_collapsed_or_hidden"});
+    trace("S06","RESPONSE_MAPPED",{
+      chat_uuid:activeUuid,received_count:Array.isArray(c.identities)?c.identities.length:0,
+      safe_values:{source:"Imeno",status:c.status||"ok"},
+      phase:"imeno_verified_identifiers_only"});
+    for(const identity of (Array.isArray(c.identities)?c.identities:[]).slice(0,12)){
+      const key={UUID:"uuid",UI_NAME:"ui_name",MCP_ID:"mcp_id",MCP_NICK:"mcp_nick"}[identity.kind];
+      if(!key || typeof identity.value!=="string")continue;
+      trace("S06",visible?"RENDER_VISIBLE":"RENDER_HIDDEN",{
+        chat_uuid:activeUuid,displayed_count:visible?1:0,
+        source_system:"Imeno",target_system:"firefox_right_panel",
+        safe_values:{source:"Imeno",field:identity.kind,[key]:identity.value},
+        phase:"imeno_identity_display"});
+    }
   }
   async function refresh(force=false){
     if(!cgsTabActive()||busy)return;
@@ -281,8 +303,12 @@
     ensureUI();
     if(contextRetryTimer){clearTimeout(contextRetryTimer);contextRetryTimer=null;}
     setStatus("Odczyt kontekstu z Imeno…");
+    trace("S08","REQUEST_START",{chat_uuid:uid,phase:"right_panel_to_imeno"});
     try{
       const data=await browser.runtime.sendMessage({type:"SUP_CONTEXT_GET",uuid:uid,force:!!force});
+      trace("S08","REQUEST_END",{chat_uuid:uid,success:!!data?.ok,
+        received_count:Array.isArray(data?.folders)?data.folders.length:0,
+        reason_code:data?.ok?"context_received":"context_not_received"});
       if(!cgsTabActive()||startEpoch!==epoch||uid!==uuid())return;
       if(!data?.ok){
         context=null;render();
@@ -300,6 +326,10 @@
       }
       context=data;
       contextFetchedAt=Date.now();
+      trace("S08","RESPONSE_MAPPED",{chat_uuid:uid,
+        received_count:Array.isArray(data?.folders)?data.folders.length:0,
+        safe_values:{source:"Imeno",status:data.status||"ok"},
+        phase:"right_panel_context"});
       initialContextRetryUuid=null;
       const valid=new Set((data.folders||[]).map(f=>f.key));
       selectedKeys=new Set([...selectedKeys].filter(key=>valid.has(key)));
@@ -307,6 +337,8 @@
       setStatus("Imeno: odczytano kontekst · rewizja "+str(data.lifecycle_revision,"?"));
     }catch(e){
       if(cgsTabActive()&&startEpoch===epoch){
+        trace("S08","API_ERROR",{chat_uuid:uid,
+          error_type:e?.name||"Error",success:false,reason_code:"context_exception"});
         context=null;render();setStatus("Błąd Imeno: "+(e.message||e),true);
       }
     }
@@ -333,6 +365,8 @@
     if(!window.confirm(message))return;
     busy=true;render();setStatus("Zapis decyzji w Imeno…");
     const startEpoch=epoch;
+    trace("S16","REPORT_PREPARED",{chat_uuid:uid,operation:action,
+      sent_count:folders.length,phase:"explicit_user_confirmation"});
     const payload={
       type:"SUP_TRIAGE",uuid:uid,action,
       expected_revision:Number(context.lifecycle_revision||0),

@@ -27,6 +27,7 @@
     "scripts": [
       "build-info.js",
       "coordinator-background.js",
+      "trace-client.js",
       "background.js"
     ]
   },
@@ -44,6 +45,7 @@
         "ui-model.js",
         "chat-index.js",
         "coordinator-client.js",
+        "trace-client.js",
         "dom-cleaner.js",
         "content.js",
         "right-panel.js"
